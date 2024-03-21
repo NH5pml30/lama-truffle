@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,33 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-open module org.graalvm.sl.launcher {
-	requires org.graalvm.polyglot;
-	exports com.oracle.truffle.lama.launcher;
+package com.oracle.truffle.lama.nodes.expression;
+
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
+import com.oracle.truffle.lama.nodes.LamaNode;
+
+@NodeInfo(shortName = "const")
+public final class IntLiteralNode extends LamaNode {
+    private final int value;
+
+    public IntLiteralNode(int value) {
+        this.value = value;
+    }
+
+    @Override
+    public int executeInt(VirtualFrame frame) throws UnexpectedResultException {
+        return value;
+    }
+
+    @Override
+    public Object execute(VirtualFrame frame) {
+        return value;
+    }
+
+    @Override
+    public String toString() {
+        return Integer.toString(value);
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,35 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-open module org.graalvm.sl.launcher {
-	requires org.graalvm.polyglot;
-	exports com.oracle.truffle.lama.launcher;
+package com.oracle.truffle.lama.nodes.builtins;
+
+import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.NodeChild;
+import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.frame.FrameDescriptor;
+import com.oracle.truffle.lama.LamaLanguage;
+import com.oracle.truffle.lama.nodes.LamaNode;
+import com.oracle.truffle.lama.nodes.LamaFunction;
+import com.oracle.truffle.lama.nodes.LamaRootNode;
+import com.oracle.truffle.lama.nodes.local.ReadArgumentNodeFactory;
+
+@NodeChild(value = "arguments", type = LamaNode[].class)
+@GenerateNodeFactory
+public abstract class BuiltinNode extends LamaNode {
+    public static RootCallTarget createBuiltinFunction(
+            LamaLanguage language,
+            NodeFactory<? extends BuiltinNode> factory,
+            FrameDescriptor frameDescriptor) {
+        int argumentCount = factory.getExecutionSignature().size();
+        LamaNode[] argumentNodes = new LamaNode[argumentCount];
+        for (int i = 0; i < argumentCount; i++) {
+            argumentNodes[i] = ReadArgumentNodeFactory.create(i);
+        }
+        BuiltinNode node = factory.createNode((Object) argumentNodes);
+        return new LamaRootNode(language, frameDescriptor, new LamaNode[]{node})
+                .getCallTarget();
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-open module org.graalvm.sl.launcher {
-	requires org.graalvm.polyglot;
-	exports com.oracle.truffle.lama.launcher;
+package com.oracle.truffle.lama.nodes;
+
+import com.oracle.truffle.api.dsl.TypeSystemReference;
+import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
+import com.oracle.truffle.api.strings.TruffleString;
+
+@TypeSystemReference(LamaTypes.class)
+@NodeInfo(language = "Lama", description = "The abstract base node for all expressions")
+public abstract class LamaNode extends Node {
+    public abstract Object execute(VirtualFrame virtualFrame);
+
+    public int executeInt(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectInteger(this.execute(virtualFrame));
+    }
+
+    public TruffleString executeString(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectTruffleString(this.execute(virtualFrame));
+    }
+
+    public LamaFunction executeLamaFunction(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectLamaFunction(this.execute(virtualFrame));
+    }
+
+    public MaterializedFrame executeMaterializedFrame(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectMaterializedFrame(this.execute(virtualFrame));
+    }
 }

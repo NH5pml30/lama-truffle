@@ -38,16 +38,18 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-module org.graalvm.sl {
+module org.graalvm.lama {
   requires java.base;
   requires java.logging;
   requires jdk.unsupported;
   requires org.antlr.antlr4.runtime;
   requires org.graalvm.polyglot;
   requires org.graalvm.truffle;
-  exports com.oracle.truffle.sl to org.graalvm.sl.test;
-  exports com.oracle.truffle.sl.runtime to org.graalvm.sl.test;
-  exports com.oracle.truffle.sl.builtins to org.graalvm.sl.test;
-  provides  com.oracle.truffle.api.provider.TruffleLanguageProvider with
-    com.oracle.truffle.sl.SLLanguageProvider;
+  exports com.oracle.truffle.lama.parser;
+  //exports com.oracle.truffle.lama.nodes.builtins to org.graalvm.lama.test;
+  //exports com.oracle.truffle.lama.nodes.expression to org.graalvm.lama.test;
+  //exports com.oracle.truffle.lama.nodes.local to org.graalvm.lama.test;
+  //exports com.oracle.truffle.lama.nodes to org.graalvm.lama.test;
+  provides com.oracle.truffle.api.provider.TruffleLanguageProvider with
+          com.oracle.truffle.lama.LamaLanguageProvider;
 }

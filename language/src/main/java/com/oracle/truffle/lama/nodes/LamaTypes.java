@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-open module org.graalvm.sl.launcher {
-	requires org.graalvm.polyglot;
-	exports com.oracle.truffle.lama.launcher;
+package com.oracle.truffle.lama.nodes;
+
+import com.oracle.truffle.api.dsl.TypeSystem;
+import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.strings.TruffleString;
+
+@TypeSystem({int.class, LamaFunction.class, TruffleString.class, MaterializedFrame.class})
+public abstract class LamaTypes {
 }
