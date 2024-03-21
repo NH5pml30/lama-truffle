@@ -9,7 +9,7 @@ import com.oracle.truffle.lama.nodes.LamaRefFactory.RefNodeFactory;
 
 public abstract class LamaRef {
     public abstract Object assign(VirtualFrame frame, Object val);
-
+    // TODO: unify logic with reading
     static class LocalRef extends LamaRef {
         public final int slot;
 

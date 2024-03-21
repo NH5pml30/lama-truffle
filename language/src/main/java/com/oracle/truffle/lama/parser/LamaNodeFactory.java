@@ -49,18 +49,14 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.lama.LamaLanguage;
-import com.oracle.truffle.lama.nodes.InvokeNode;
-import com.oracle.truffle.lama.nodes.LamaNode;
-import com.oracle.truffle.lama.nodes.LamaRef;
+import com.oracle.truffle.lama.nodes.*;
 import com.oracle.truffle.lama.nodes.builtins.*;
 import com.oracle.truffle.lama.nodes.local.*;
+import com.oracle.truffle.lama.nodes.expression.*;
 import org.antlr.v4.runtime.Token;
 
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.source.Source;
-import com.oracle.truffle.lama.nodes.LamaRootNode;
-import com.oracle.truffle.lama.nodes.expression.IntLiteralNode;
-import com.oracle.truffle.lama.nodes.builtins.AddNodeFactory;
 import org.graalvm.collections.Pair;
 
 public class LamaNodeFactory {
@@ -84,17 +80,28 @@ public class LamaNodeFactory {
         Prefix,
         Postfix
     }
-    private record OpInfo(OpType type, NodeFactory<? extends LamaNode> factory) {}
+    private record OpInfo<T extends LamaNode>(OpType type, NodeFactory<? extends T> factory) {}
 
-    private final List<Map<String, OpInfo>> operatorInfo = Arrays.asList(
-            Map.of(":=", new OpInfo(OpType.InfixRight, AssignNodeFactory.getInstance())),
-            Map.of("+", new OpInfo(OpType.InfixLeft, AddNodeFactory.getInstance())),
-            Map.of("*", new OpInfo(OpType.InfixLeft, MulNodeFactory.getInstance()))
+    private static <S extends LamaNode, T extends S> OpInfo<S> castOpInfo(OpInfo<T> opInfo) {
+        return new OpInfo<>(opInfo.type, opInfo.factory);
+    }
+
+    private static final List<Map<String, OpInfo<BuiltinNode>>> BUILTIN_OPERATOR_INFO = Arrays.asList(
+            Map.of(":=", new OpInfo<>(OpType.InfixRight, AssignNodeFactory.getInstance())),
+            Map.of("+", new OpInfo<>(OpType.InfixLeft, AddNodeFactory.getInstance())),
+            Map.of("*", new OpInfo<>(OpType.InfixLeft, MulNodeFactory.getInstance()))
     );
 
-    Pair<Integer, OpInfo> getOpInfo(Token t) {
-        return IntStream.range(0, operatorInfo.size()).boxed()
-                .flatMap(i -> Stream.ofNullable(operatorInfo.get(i).get(t.getText())).map(in -> Pair.create(i, in)))
+    private static final List<Map<String, OpInfo<LamaNode>>> OPERATOR_INFO =
+            BUILTIN_OPERATOR_INFO.stream().map(
+                    x -> x.entrySet().stream()
+                            .map(y -> Map.entry(y.getKey(), LamaNodeFactory.<LamaNode, BuiltinNode>castOpInfo(y.getValue())))
+                            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))
+            ).toList();
+
+    Pair<Integer, OpInfo<LamaNode>> getOpInfo(Token t) {
+        return IntStream.range(0, OPERATOR_INFO.size()).boxed()
+                .flatMap(i -> Stream.ofNullable(OPERATOR_INFO.get(i).get(t.getText())).map(in -> Pair.create(i, in)))
                 .findFirst().orElseThrow(() -> newSemErr(t, "Unrecognized operator"));
     }
 
@@ -115,10 +122,14 @@ public class LamaNodeFactory {
         return Objects.equals(t.getText(), ":=") ? ValueCategory.Ref : ValueCategory.Val;
     }
 
-    private final static Map<String, NodeFactory<? extends BuiltinNode>> BUILTINS = Map.of(
-            "print", PrintNodeFactory.getInstance(),
-            "+", AddNodeFactory.getInstance()
-    );
+    private final static Map<String, NodeFactory<? extends BuiltinNode>> BUILTINS =
+            Stream.concat(
+                BUILTIN_OPERATOR_INFO.stream().flatMap(m -> m.entrySet().stream())
+                                .map(e -> Map.entry(e.getKey(), e.getValue().factory)),
+                Map.of(
+                    "print", PrintNodeFactory.getInstance()
+                ).entrySet().stream()
+            ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
     enum ValueCategory {
         Val, Ref
@@ -167,6 +178,7 @@ public class LamaNodeFactory {
     }
 
     // Lexical scope to resolve identifiers during parsing
+    // TODO: make block scope without closure
     private static class LexicalScope {
         protected final LexicalScope outer;
 
