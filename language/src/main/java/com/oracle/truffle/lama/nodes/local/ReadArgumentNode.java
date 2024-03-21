@@ -53,6 +53,6 @@ public abstract class ReadArgumentNode extends LamaNode {
 
     @Specialization
     public Object read(VirtualFrame frame) {
-        return frame.getArguments()[getIndex()];
+        return frame.getArguments()[1 + getIndex()];
     }
 }

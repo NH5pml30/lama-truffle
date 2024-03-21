@@ -3,6 +3,7 @@ package com.oracle.truffle.lama.nodes;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.lama.nodes.LamaRefFactory.RefNodeFactory;
 
@@ -23,6 +24,35 @@ public abstract class LamaRef {
         }
     }
 
+    static class ArgRef extends LamaRef {
+        public final int index;
+
+        ArgRef(int index) {
+            this.index = index;
+        }
+
+        @Override
+        public Object assign(VirtualFrame frame, Object val) {
+            frame.getArguments()[1 + index] = val;
+            return val;
+        }
+    }
+
+    static class ClosureRef extends LamaRef {
+        public final int slot;
+
+        ClosureRef(int slot) {
+            this.slot = slot;
+        }
+
+        @Override
+        public Object assign(VirtualFrame frame, Object val) {
+            var closure = (MaterializedFrame) frame.getArguments()[0];
+            closure.setObject(slot, val);
+            return val;
+        }
+    }
+
     @NodeField(name = "ref", type = LamaRef.class)
     @GenerateNodeFactory
     static abstract class RefNode extends LamaNode {
@@ -37,10 +67,10 @@ public abstract class LamaRef {
     }
 
     public static LamaNode arg(int index) {
-        return null;
+        return RefNodeFactory.create(new ArgRef(index));
     }
 
-    public static LamaNode closure(int index) {
-        return null;
+    public static LamaNode closure(int slot) {
+        return RefNodeFactory.create(new ClosureRef(slot));
     }
 }
