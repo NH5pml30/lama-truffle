@@ -40,24 +40,19 @@
  */
 package com.oracle.truffle.lama.parser;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.FrameSlotKind;
-import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.nodes.InvokeNode;
-import com.oracle.truffle.lama.nodes.LamaFunction;
 import com.oracle.truffle.lama.nodes.LamaNode;
-import com.oracle.truffle.lama.nodes.builtins.BuiltinNode;
-import com.oracle.truffle.lama.nodes.builtins.PrintNodeFactory;
+import com.oracle.truffle.lama.nodes.LamaRef;
+import com.oracle.truffle.lama.nodes.builtins.*;
 import com.oracle.truffle.lama.nodes.local.*;
 import org.antlr.v4.runtime.Token;
 
@@ -70,19 +65,114 @@ import org.graalvm.collections.Pair;
 
 public class LamaNodeFactory {
     private final LamaLanguage language;
+    private final Source source;
+
+    LamaParseError newSemErr(Token token, String message) {
+        assert token != null;
+        return newParseError(source, token.getLine(), token.getCharPositionInLine(), token, message);
+    }
+
+    static LamaParseError newParseError(Source source, int line, int charPositionInLine, Token token, String message) {
+        int col = charPositionInLine + 1;
+        String location = "-- line " + line + " col " + col + ": ";
+        int length = token == null ? 1 : Math.max(token.getStopIndex() - token.getStartIndex(), 0);
+        return new LamaParseError(source, line, col, length, String.format("Error(s) parsing script:%n" + location + message));
+    }
+
+    enum OpType {
+        InfixLeft, InfixRight, Infix,
+        Prefix,
+        Postfix
+    }
+    private record OpInfo(OpType type, NodeFactory<? extends LamaNode> factory) {}
+
+    private final List<Map<String, OpInfo>> operatorInfo = Arrays.asList(
+            Map.of(":=", new OpInfo(OpType.InfixRight, AssignNodeFactory.getInstance())),
+            Map.of("+", new OpInfo(OpType.InfixLeft, AddNodeFactory.getInstance())),
+            Map.of("*", new OpInfo(OpType.InfixLeft, MulNodeFactory.getInstance()))
+    );
+
+    Pair<Integer, OpInfo> getOpInfo(Token t) {
+        return IntStream.range(0, operatorInfo.size()).boxed()
+                .flatMap(i -> Stream.ofNullable(operatorInfo.get(i).get(t.getText())).map(in -> Pair.create(i, in)))
+                .findFirst().orElseThrow(() -> newSemErr(t, "Unrecognized operator"));
+    }
+
+    int getPrecedence(Token t) {
+        return getOpInfo(t).getLeft();
+    }
+
+    int getNextPrecedence(Token t) {
+        var info = getOpInfo(t);
+        return switch (info.getRight().type) {
+            case InfixRight, Prefix -> info.getLeft();
+            default -> info.getLeft() + 1;
+        };
+    }
+
+    ValueCategory op2cat(Token t) {
+        System.out.format("Check lvalue: %s\n", t.getText());
+        return Objects.equals(t.getText(), ":=") ? ValueCategory.Ref : ValueCategory.Val;
+    }
 
     private final static Map<String, NodeFactory<? extends BuiltinNode>> BUILTINS = Map.of(
             "print", PrintNodeFactory.getInstance(),
             "+", AddNodeFactory.getInstance()
     );
 
+    enum ValueCategory {
+        Val, Ref
+    }
+
+    interface GenInterface<T> {
+        T generate(ValueCategory cat);
+    }
+
+    interface ExprGen extends GenInterface<LamaNode> {}
+    interface ExprsGen extends GenInterface<List<LamaNode>> {
+        static ExprsGen of() {
+            return a -> new ArrayList<>();
+        }
+
+        static ExprsGen of(ExprGen val) {
+            return a -> {
+                var x = new ArrayList<LamaNode>();
+                x.add(val.generate(a));
+                return x;
+            };
+        }
+
+        /* static ExprsGen add(ExprsGen lhs, ExprGen rhs) {
+            return a -> {
+                var x = lhs.generate(ValueCategory.Val);
+                x.add(rhs.generate(a));
+                return x;
+            };
+        } */
+
+        static ExprsGen add(ExprsGen lhs, ExprsGen rhs) {
+            return a -> {
+                var x = lhs.generate(ValueCategory.Val);
+                x.addAll(rhs.generate(a));
+                return x;
+            };
+        }
+    }
+
+    LamaNode assertValue(ValueCategory a, LamaNode ret, Token t) {
+        if (a == ValueCategory.Ref) {
+            throw newSemErr(t, "reference expected");
+        }
+        return ret;
+    }
+
     // Lexical scope to resolve identifiers during parsing
-    static class LexicalScope {
+    private static class LexicalScope {
         protected final LexicalScope outer;
 
-        protected final Map<String, ReadArgumentNode> args = new HashMap<>();
-        protected final Map<String, ReadLocalNode> locals = new HashMap<>();
-        protected final Map<String, Pair<ReadClosureNode, LamaNode>> closure = new HashMap<>();
+        protected final Map<String, Integer> args = new HashMap<>();
+        protected final Map<String, Integer> locals = new HashMap<>();
+        protected final Map<String, Pair<Integer, LamaNode>> closure = new HashMap<>();
         public final FrameDescriptor.Builder closureBuilder = FrameDescriptor.newBuilder();
         public final FrameDescriptor.Builder localBuilder = FrameDescriptor.newBuilder();
         public final List<LamaNode> initNodes = new ArrayList<>();
@@ -91,56 +181,74 @@ public class LamaNodeFactory {
             this.outer = outer;
         }
 
-        public LamaNode find(String name) {
-            LamaNode result = locals.get(name);
-            if (result != null) {
-                return result;
+        LamaNode getLocal(int slot, boolean isRef) {
+            return isRef ? LamaRef.local(slot) : ReadLocalNodeFactory.create(slot);
+        }
+
+        LamaNode getArg(int index, boolean isRef) {
+            return isRef ? LamaRef.arg(index) : ReadArgumentNodeFactory.create(index);
+        }
+
+        LamaNode getClosure(int slot, boolean isRef) {
+            return isRef ? LamaRef.closure(slot) : ReadClosureNodeFactory.create(slot);
+        }
+
+        public LamaNode find(String name, boolean isRef) {
+            // Try locals
+            {
+                var slot = locals.get(name);
+                if (slot != null) {
+                    return getLocal(slot, isRef);
+                }
             }
-            result = args.get(name);
-            if (result != null) {
-                return result;
+            // Try arguments
+            {
+                var index = args.get(name);
+                if (index != null) {
+                    return getArg(index, isRef);
+                }
             }
+            // Try closure
             {
                 var cResult = closure.get(name);
                 if (cResult != null) {
-                    return cResult.getLeft();
+                    var slot = cResult.getLeft();
+                    return getClosure(slot, isRef);
                 }
             }
 
+            // Add to closure
             if (outer == null) {
                 return null;
             }
-            result = outer.find(name);
+            var result = outer.find(name, isRef);
             if (result == null) {
                 return null;
             }
 
-            return addClosure(name, result);
+            return addClosure(name, result, isRef);
         }
 
-        public ReadArgumentNode addArgument(String name, int index) {
-            var result = ReadArgumentNodeFactory.create(index);
-            args.put(name, result);
-            return result;
+        public void addArgument(String name, int index) {
+            args.put(name, index);
         }
 
-        public ReadLocalNode addLocal(String name, LamaNode value) {
-            var result = ReadLocalNodeFactory.create(
-                    localBuilder.addSlot(FrameSlotKind.Illegal, name, null)
-            );
-            locals.put(name, result);
+        public void addLocal(String name, LamaNode value) {
+            var slot = localBuilder.addSlot(FrameSlotKind.Illegal, name, null);
+            locals.put(name, slot);
             if (value != null) {
-                initNodes.add(WriteLocalNodeFactory.create(value, result.getSlot()));
+                initNodes.add(AssignNodeFactory.create(new LamaNode[]{getLocal(slot, true), value}));
             }
-            return result;
         }
 
-        public ReadClosureNode addClosure(String name, LamaNode value) {
-            var result = ReadClosureNodeFactory.create(
-                    closureBuilder.addSlot(FrameSlotKind.Illegal, name, null)
-            );
-            closure.put(name, Pair.create(result, value));
-            return result;
+        protected LamaNode addClosure(String name, LamaNode value, boolean isRef) {
+            var slot = closureBuilder.addSlot(FrameSlotKind.Illegal, name, null);
+            closure.put(name, Pair.create(slot, value));
+            return getClosure(slot, isRef);
+        }
+
+        public void addClosure(String name, LamaNode value) {
+            addClosure(name, value, false);
         }
 
         ClosureNode getClosure() {
@@ -148,7 +256,7 @@ public class LamaNodeFactory {
                     closureBuilder.build(),
                     closure.values().stream().collect(
                             Collectors.toMap(
-                                    e -> e.getLeft().getSlot(),
+                                    Pair::getLeft,
                                     Pair::getRight
                             )
                     )
@@ -161,6 +269,7 @@ public class LamaNodeFactory {
 
     LamaNodeFactory(LamaLanguage language, Source source) {
         this.language = language;
+        this.source = source;
     }
 
     void startFunction(List<Token> arguments) {
@@ -186,32 +295,36 @@ public class LamaNodeFactory {
         }
     }
 
-    void addLocal(Token name, LamaNode init) {
-        lexicalScope.addLocal(name.getText(), init);
+    void addLocal(Token name, ExprGen init) {
+        System.out.format("Add local: %s\n", name.getText());
+        lexicalScope.addLocal(name.getText(), init.generate(ValueCategory.Val));
     }
 
-    LamaNode finishFunction(List<LamaNode> bodyNodes) {
+    ExprGen finishFunction(ExprsGen body, Token t) {
+        System.out.println("finish function");
+        var bodyNodes = body.generate(ValueCategory.Val);
         var closure = lexicalScope.getClosure();
         var desc = lexicalScope.localBuilder.build();
         var initNodes = lexicalScope.initNodes;
         lexicalScope = lexicalScope.outer;
 
-        if (containsNull(bodyNodes)) {
-            return null;
-        }
+        return a -> {
+            if (containsNull(bodyNodes.stream())) {
+                return null;
+            }
 
-        return LambdaNodeFactory.create(
-                new LamaRootNode(
-                        language, desc,
-                        Stream.concat(initNodes.stream(), bodyNodes.stream()).toArray(LamaNode[]::new)
-                ).getCallTarget(),
-                closure
-
-        );
+            return assertValue(a, LambdaNodeFactory.create(
+                    new LamaRootNode(
+                            language, desc,
+                            Stream.concat(initNodes.stream(), bodyNodes.stream()).toArray(LamaNode[]::new)
+                    ).getCallTarget(),
+                    closure
+            ), t);
+        };
     }
 
-    CallTarget finishMain(List<LamaNode> bodyNodes) {
-        var mainNode = finishFunction(bodyNodes);
+    CallTarget finishMain(ExprsGen body, Token t) {
+        var mainNode = finishFunction(body, t);
         if (mainNode == null) {
             return null;
         }
@@ -219,56 +332,61 @@ public class LamaNodeFactory {
         return new LamaRootNode(language, null, new LamaNode[] {
                 createCall(
                         mainNode,
-                        List.of()
-                )
+                        List.of(),
+                        t
+                ).generate(ValueCategory.Val)
         }).getCallTarget();
     }
 
-    LamaNode createIntLiteral(Token intLiteral) {
-        return new IntLiteralNode(Integer.parseInt(intLiteral.getText()));
+    ExprGen createIntLiteral(Token intLiteral) {
+        return a ->
+            assertValue(a, new IntLiteralNode(Integer.parseInt(intLiteral.getText())), intLiteral);
     }
 
-    LamaNode createBinary(Token opToken, LamaNode leftNode, LamaNode rightNode) {
-        if (leftNode == null || rightNode == null) {
-            return null;
-        }
-
-        return switch (opToken.getText()) {
-            case "+" -> AddNodeFactory.create(new LamaNode[]{leftNode, rightNode});
-            case ":=" -> {
-                var left = (ReadLocalNode) leftNode;
-                yield WriteLocalNodeFactory.create(rightNode, left.getSlot());
+    ExprGen createBinary(Token opToken, ExprGen left, ExprGen right) {
+        return a -> {
+            var leftNode = left.generate(op2cat(opToken));
+            var rightNode = right.generate(ValueCategory.Val);
+            if (leftNode == null || rightNode == null) {
+                return null;
             }
-            default -> throw new RuntimeException("unexpected operation: " + opToken.getText());
+
+            return assertValue(
+                    a,
+                    getOpInfo(opToken).getRight().factory
+                            .createNode((Object) new LamaNode[]{leftNode, rightNode}),
+                    opToken
+            );
         };
     }
 
-    LamaNode createRead(Token name) {
-        final var node = lexicalScope.find(name.getText());
-        if (node != null) {
-            System.out.format("Found this for name '%s': ", name.getText());
-            System.out.println(node);
-            return node;
-        }
-        System.out.format("Didn't find name: %s\n", name.getText());
-        return null;
-    }
-
-    LamaNode createCall(LamaNode functionNode, List<LamaNode> parameterNodes) {
-        if (functionNode == null || containsNull(parameterNodes)) {
-            return null;
-        }
-
-        return new InvokeNode(functionNode, parameterNodes.toArray(new LamaNode[0]));
-    }
-
-    private static boolean containsNull(List<?> list) {
-        for (Object e : list) {
-            if (e == null) {
-                return true;
+     ExprGen createRead(Token name) {
+        return a -> {
+            final var node = lexicalScope.find(name.getText(), a == ValueCategory.Ref);
+            if (node != null) {
+                System.out.format("Found this for [%s] name '%s': ", a == ValueCategory.Ref ? "l" : "r", name.getText());
+                System.out.println(node);
+                return node;
             }
-        }
-        return false;
+            System.out.format("Didn't find name: %s\n", name.getText());
+            return null;
+        };
+    }
+
+    ExprGen createCall(ExprGen function, List<ExprGen> parameters, Token t) {
+        return a -> {
+            var functionNode = function.generate(ValueCategory.Val);
+            var parameterNodes = parameters.stream().map(p -> p.generate(ValueCategory.Val)).toArray(LamaNode[]::new);
+            if (functionNode == null || containsNull(Arrays.stream(parameterNodes))) {
+                return null;
+            }
+
+            return assertValue(a, new InvokeNode(functionNode, parameterNodes), t);
+        };
+    }
+
+    private static boolean containsNull(Stream<?> stream) {
+        return stream.anyMatch(Objects::isNull);
     }
 
 }

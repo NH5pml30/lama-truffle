@@ -59,6 +59,7 @@ import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.LamaLanguage;
+import com.oracle.truffle.lama.parser.LamaNodeFactory.*;
 }
 
 @lexer::header
@@ -83,15 +84,11 @@ private static final class BailoutErrorListener extends BaseErrorListener {
 }
 
 public void SemErr(Token token, String message) {
-    assert token != null;
-    throwParseError(source, token.getLine(), token.getCharPositionInLine(), token, message);
+    throw factory.newSemErr(token, message);
 }
 
 private static void throwParseError(Source source, int line, int charPositionInLine, Token token, String message) {
-    int col = charPositionInLine + 1;
-    String location = "-- line " + line + " col " + col + ": ";
-    int length = token == null ? 1 : Math.max(token.getStopIndex() - token.getStartIndex(), 0);
-    throw new LamaParseError(source, line, col, length, String.format("Error(s) parsing script:%n" + location + message));
+    throw LamaNodeFactory.newParseError(source, line, charPositionInLine, token, message);
 }
 
 public static CallTarget parseLama(LamaLanguage language, Source source) {
@@ -106,14 +103,22 @@ public static CallTarget parseLama(LamaLanguage language, Source source) {
     parser.source = source;
     return parser.compilationUnit().result;
 }
+
+private int getOpPrecedence() {
+    return factory.getPrecedence(_input.LT(1));
+}
+
+private int getNextPrecedence() {
+    return factory.getNextPrecedence(_input.LT(-1));
+}
 }
 
 // parser
 
 compilationUnit returns [CallTarget result] :
     importStt*
-                        { factory.startMain(); }
-    scopeExpression     { $result = factory.finishMain($scopeExpression.result); }
+                    { factory.startMain(); }
+    scopeExpression { $result = factory.finishMain($scopeExpression.result, _input.LT(1)); }
     EOF
 ;
 
@@ -121,8 +126,8 @@ importStt :
     'import' UIDENT ';'
 ;
 
-scopeExpression returns [List<LamaNode> result] :
-    definition* { $result = List.of(); }
+scopeExpression returns [ExprsGen result] :
+    definition* { $result = ExprsGen.of(); }
     expression? { $result = $expression.result; }
 ;
 
@@ -146,14 +151,14 @@ variableDefinitionSequence :
 variableDefinitionItem :
     LIDENT { factory.addLocal($LIDENT, null); }
     |
-    LIDENT '=' basicExpression { factory.addLocal($LIDENT, $basicExpression.result); }
+    LIDENT '=' basicExpression[0] { factory.addLocal($LIDENT, $basicExpression.result); }
 ;
 
-functionDefinition returns [LamaNode result] :
+functionDefinition :
     'public'?
-    'fun' name=LIDENT
+    t='fun' name=LIDENT
     '(' functionArguments ')' { factory.startFunction($functionArguments.result); }
-    functionBody              { factory.addLocal($name, factory.finishFunction($functionBody.result)); }
+    functionBody              { factory.addLocal($name, factory.finishFunction($functionBody.result, $t)); }
 ;
 
 functionArguments returns [List<Token> result] :
@@ -166,59 +171,44 @@ functionArguments returns [List<Token> result] :
     )?
 ;
 
-functionBody returns [List<LamaNode> result] :
+functionBody returns [ExprsGen result] :
     '{' scopeExpression '}' { $result = $scopeExpression.result; }
 ;
 
-expression returns [List<LamaNode> result] :
-    basicExpression { $result = new ArrayList<LamaNode>(); $result.add($basicExpression.result); }
+expression returns [ExprsGen result] :
+    basicExpression[0] { $result = ExprsGen.of($basicExpression.result); }
     |
-    basicExpression    { $result = new ArrayList<LamaNode>(); $result.add($basicExpression.result); }
-    ';' expression  { $result.addAll($expression.result); }
+    basicExpression[0] { $result = ExprsGen.of($basicExpression.result); }
+    ';' expression     { $result = ExprsGen.add($result, $expression.result); }
 ;
 
-basicExpression returns [LamaNode result] :
-    binaryExpression   { $result = $binaryExpression.result; }
-;
-
-binaryExpression returns [LamaNode result] :
-    lhs1=binaryExpression
-    op=INFIX
-    binaryOperand
-                        { $result = factory.createBinary($op, $lhs1.result, $binaryOperand.result); }
+basicExpression [int _p] returns [ExprGen result] :
+    primaryExpression { $result = $primaryExpression.result; }
     |
-    lhs2=minusPostfixExpression
-    op=INFIX
-    binaryOperand
-                        { $result = factory.createBinary($op, $lhs2.result, $binaryOperand.result); }
-    |
-    minusPostfixExpression
-                        { $result = $minusPostfixExpression.result; }
-;
-
-binaryOperand returns [LamaNode result] :
-    binaryExpression { $result = $binaryExpression.result; } |
-    minusPostfixExpression { $result = $minusPostfixExpression.result; }
-;
-
-minusPostfixExpression returns [LamaNode result] :
-    postfixExpression { $result = $postfixExpression.result; } // TODO: fix unary minus
-;
-
-postfixExpression returns [LamaNode result] :
-    primary { $result = $primary.result; } |
-    callee=postfixExpression '(' { List<LamaNode> args = new ArrayList<LamaNode>(); }
+    lhs=primaryExpression
     (
-        basicExpression { args.add($basicExpression.result); } // TODO: fix
-        (
-            ',' basicExpression { args.add($basicExpression.result); } // TODO: fix to expression
-        )*
-    )? ')' { $result = factory.createCall($callee.result, args); }
-    |
-    postfixExpression '[' expression ']'
+        {getOpPrecedence() >= $_p}? op=BINARY rhs=basicExpression[getNextPrecedence()]
+        { $result = factory.createBinary($op, $lhs.result, $rhs.result); }
+    )+
 ;
 
-primary returns [LamaNode result] :
+primaryExpression returns [ExprGen result] :
+    primary { $result = $primary.result; }
+    (
+        '[' expression ']' // TODO: fix
+        |
+        '(' { List<ExprGen> args = new ArrayList<ExprGen>(); }
+            (
+                basicExpression[0] { args.add($basicExpression.result); } // TODO: fix to expression
+                (
+                    ',' basicExpression[0] { args.add($basicExpression.result); } // TODO: fix to expression
+                )*
+            )?
+        t=')' { $result = factory.createCall($result, args, $t); }
+    )*
+;
+
+primary returns [ExprGen result] :
     d=DECIMAL { $result = factory.createIntLiteral($d); } |
     STRING |
     CHAR |
@@ -227,6 +217,7 @@ primary returns [LamaNode result] :
     'false' |
     'fun' '(' functionArguments ')' functionBody |
     'skip' |
+    UNARY basicExpression[0] |
     '(' scopeExpression ')' |
     // listExpression |
     // arrayExpression |
@@ -493,11 +484,13 @@ fragment LETTER : [A-Z] | [a-z] | '_';
 fragment DIGIT : [0-9];
 fragment STRING_CHAR : ~'"' | '""';
 fragment CHAR_CHAR : ~'\'' | '\'\'' | '\\n' | '\\t';
-fragment INFIX_CHAR : [+\-*/=<>:@#!];
+fragment BINARY_CHAR : [+\-*/=<>:@#!];
+fragment UNARY_CHAR : '-';
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
 DECIMAL : DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
-INFIX : INFIX_CHAR+;
+UNARY : UNARY_CHAR;
+BINARY : BINARY_CHAR+;
