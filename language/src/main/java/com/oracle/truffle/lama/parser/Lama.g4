@@ -103,21 +103,12 @@ public static CallTarget parseLama(LamaLanguage language, Source source) {
     parser.source = source;
     return parser.compilationUnit().result;
 }
-
-private int getOpPrecedence() {
-    return factory.getPrecedence(_input.LT(1));
-}
-
-private int getNextPrecedence() {
-    return factory.getNextPrecedence(_input.LT(-1));
-}
 }
 
 // parser
 
 compilationUnit returns [CallTarget result] :
-    importStt*
-                    { factory.startMain(); }
+    importStt*      { factory.startMain(); }
     scopeExpression { $result = factory.finishMain($scopeExpression.result, _input.LT(1)); }
     EOF
 ;
@@ -184,12 +175,11 @@ expression returns [ExprsGen result] :
 
 basicExpression [int _p] returns [ExprGen result] :
     primaryExpression { $result = $primaryExpression.result; }
-    |
-    lhs=primaryExpression
     (
-        {getOpPrecedence() >= $_p}? op=BINARY rhs=basicExpression[getNextPrecedence()]
-        { $result = factory.createBinary($op, $lhs.result, $rhs.result); }
-    )+
+        {factory.getPrecedence(_input.LT(1)) >= $_p}?
+        op=BINARY rhs=basicExpression[factory.getNextPrecedence($op)]
+        { $result = factory.createBinary($op, $result, $rhs.result); }
+    )*
 ;
 
 primaryExpression returns [ExprGen result] :
@@ -214,11 +204,15 @@ primary returns [ExprGen result] :
     CHAR |
     i=LIDENT { $result = factory.createRead($i); } |
     'true' |
-    'false' |
-    'fun' '(' functionArguments ')' functionBody |
+    'false'
+    |
+    t='fun' '('
+    functionArguments { factory.startFunction($functionArguments.result); }
+    ')' functionBody  { $result = factory.finishFunction($functionBody.result, $t); }
+    |
     'skip' |
     UNARY basicExpression[0] |
-    '(' scopeExpression ')' |
+    '(' basicExpression[0] ')' { $result = $basicExpression.result; } | // TODO: fix to scope expression
     // listExpression |
     // arrayExpression |
     // sExpression |
@@ -489,7 +483,7 @@ fragment UNARY_CHAR : '-';
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
-DECIMAL : DIGIT+;
+DECIMAL : '-'? DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
 UNARY : UNARY_CHAR;
