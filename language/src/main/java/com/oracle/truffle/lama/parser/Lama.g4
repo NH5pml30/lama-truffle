@@ -120,7 +120,18 @@ importStt :
 scopeExpression returns [ExprGen result] :
     { factory.startBlock(); }
     definition*
-    expression  { $result = factory.finishBlock($expression.result); } // TODO: fix null?
+    expression  { $result = factory.finishBlock($expression.result); }
+;
+
+scopeExpression0 returns [ExprGen result] :
+    { factory.startBlock(); }
+    definition*
+    { ExprsGen gen = ExprsGen.of(); }
+    (
+        expression
+        { gen = $expression.result; }
+    )?
+    { $result = factory.finishBlock(gen); }
 ;
 
 definition :
@@ -164,7 +175,7 @@ functionArguments returns [List<Token> result] :
 ;
 
 functionBody returns [ExprGen result] :
-    '{' scopeExpression? '}' { $result = $scopeExpression.result; } // TODO: fix null?
+    '{' scopeExpression0 '}' { $result = $scopeExpression0.result; }
 ;
 
 expression returns [ExprsGen result] :
@@ -178,7 +189,7 @@ basicExpression [int _p] returns [ExprGen result] :
     primaryExpression { $result = $primaryExpression.result; }
     (
         {factory.getPrecedence(_input.LT(1)) >= $_p}?
-        op=BINARY rhs=basicExpression[factory.getNextPrecedence($op)]
+        op=OP rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
         { $result = factory.createBinary($op, $result, $rhs.result); }
     )*
 ;
@@ -212,36 +223,45 @@ primary returns [ExprGen result] :
     ')' functionBody  { $result = factory.finishFunction($functionBody.result, $t); }
     |
     'skip' |
-    UNARY basicExpression[0] |
+    OP basicExpression[0] |
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
     // listExpression |
     // arrayExpression |
     // sExpression |
-    ifExpression |
-    whileDoExpression |
+    ifExpression { $result = $ifExpression.result; } |
+    whileDoExpression { $result = $whileDoExpression.result; } |
     doWhileExpression |
     forExpression // |
     // caseExpression
 ;
 
-ifExpression :
+ifExpression returns [ExprGen result] :
+    { ExprGen falsePart = null; }
     'if' expression
     'then' scopeExpression
-    elsePart?
+    (
+        elsePart { falsePart = $elsePart.result; }
+    )?
+    { $result = factory.createIfThenElse(factory.finishSeq($expression.result), $scopeExpression.result, falsePart); }
     'fi'
 ;
 
-elsePart :
+elsePart returns [ExprGen result] :
+    { ExprGen falsePart = null; }
     'elif' expression
     'then' scopeExpression
-    elsePart?
+    (
+        elsePart { falsePart = $elsePart.result; }
+    )?
+    { $result = factory.createIfThenElse(factory.finishSeq($expression.result), $scopeExpression.result, falsePart); }
     |
-    'else' scopeExpression
+    'else' scopeExpression { $result = $scopeExpression.result; }
 ;
 
-whileDoExpression :
+whileDoExpression returns [ExprGen result] :
     'while' expression
     'do' scopeExpression
+    { $result = factory.createWhileDo(factory.finishSeq($expression.result), $scopeExpression.result); }
     'od'
 ;
 
@@ -479,13 +499,11 @@ fragment LETTER : [A-Z] | [a-z] | '_';
 fragment DIGIT : [0-9];
 fragment STRING_CHAR : ~'"' | '""';
 fragment CHAR_CHAR : ~'\'' | '\'\'' | '\\n' | '\\t';
-fragment BINARY_CHAR : [+\-*/=<>:@#!];
-fragment UNARY_CHAR : '-';
+fragment OP_CHAR : [+\-*/=<>:@#!%];
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
 DECIMAL : '-'? DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
-UNARY : UNARY_CHAR;
-BINARY : BINARY_CHAR+;
+OP : OP_CHAR+;

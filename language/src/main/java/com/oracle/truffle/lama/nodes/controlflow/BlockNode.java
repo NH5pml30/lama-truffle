@@ -8,11 +8,16 @@ public class BlockNode extends LamaNode implements ElementExecutor<LamaNode> {
     @Child private com.oracle.truffle.api.nodes.BlockNode<LamaNode> block;
 
     public BlockNode(LamaNode[] bodyNodes) {
-        this.block = com.oracle.truffle.api.nodes.BlockNode.create(bodyNodes, this);
+        this.block = bodyNodes.length > 0
+                ? com.oracle.truffle.api.nodes.BlockNode.create(bodyNodes, this)
+                : null;
     }
 
     @Override
     public Object execute(VirtualFrame virtualFrame) {
+        if (block == null) {
+            return null;
+        }
         return block.executeGeneric(virtualFrame, com.oracle.truffle.api.nodes.BlockNode.NO_ARGUMENT);
     }
 

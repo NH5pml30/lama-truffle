@@ -44,7 +44,6 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 
-@NodeInfo(shortName = "+")
 public abstract class AddNode extends BuiltinNode {
     @Specialization
     protected int add(int left, int right) {

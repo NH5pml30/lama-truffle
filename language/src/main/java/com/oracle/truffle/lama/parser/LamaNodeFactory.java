@@ -51,7 +51,7 @@ import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.nodes.*;
 import com.oracle.truffle.lama.nodes.builtins.*;
-import com.oracle.truffle.lama.nodes.controlflow.BlockNode;
+import com.oracle.truffle.lama.nodes.controlflow.*;
 import com.oracle.truffle.lama.nodes.local.*;
 import com.oracle.truffle.lama.nodes.expression.*;
 import org.antlr.v4.runtime.Token;
@@ -73,7 +73,10 @@ public class LamaNodeFactory {
         int col = charPositionInLine + 1;
         String location = "-- line " + line + " col " + col + ": ";
         int length = token == null ? 1 : Math.max(token.getStopIndex() - token.getStartIndex(), 0);
-        return new LamaParseError(source, line, col, length, String.format("Error(s) parsing script:%n" + location + message));
+        String msg = token == null
+                ? String.format("Error(s) parsing script:\n%s%s", location, message)
+                : String.format("Error(s) parsing script:\n%s%s: '%s'", location, message, token.getText());
+        return new LamaParseError(source, line, col, length, msg);
     }
 
     enum OpType {
@@ -93,12 +96,30 @@ public class LamaNodeFactory {
                     Map.of(":=", opInfo(AssignNodeFactory.getInstance()))
             ),
             Pair.create(
+                    OpType.InfixNone,
+                    Map.of(
+                            "==", opInfo(EqNodeFactory.getInstance()),
+                            "!=", opInfo(NeqNodeFactory.getInstance()),
+                            "<=", opInfo(LeqNodeFactory.getInstance()),
+                            "<", opInfo(LtNodeFactory.getInstance()),
+                            ">=", opInfo(GeqNodeFactory.getInstance()),
+                            ">", opInfo(GtNodeFactory.getInstance())
+                    )
+            ),
+            Pair.create(
                     OpType.InfixLeft,
-                    Map.of("+", opInfo(AddNodeFactory.getInstance()))
+                    Map.of(
+                            "+", opInfo(AddNodeFactory.getInstance()),
+                            "-", opInfo(SubNodeFactory.getInstance())
+                    )
             ),
             Pair.create(
                     OpType.InfixRight,
-                    Map.of("*", opInfo(MulNodeFactory.getInstance()))
+                    Map.of(
+                            "*", opInfo(MulNodeFactory.getInstance()),
+                            "/", opInfo(DivNodeFactory.getInstance()),
+                            "%", opInfo(ModNodeFactory.getInstance())
+                    )
             )
     );
 
@@ -145,7 +166,8 @@ public class LamaNodeFactory {
                     BUILTIN_OPERATOR_INFO.stream().flatMap(m -> m.getRight().entrySet().stream())
                             .map(e -> Map.entry(e.getKey(), e.getValue().factory)),
                     Map.of(
-                            "print", PrintNodeFactory.getInstance()
+                            "write", WriteNodeFactory.getInstance(),
+                            "read", ReadNodeFactory.getInstance()
                     ).entrySet().stream()
             ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
@@ -173,13 +195,9 @@ public class LamaNodeFactory {
             };
         }
 
-        /* static ExprsGen add(ExprsGen lhs, ExprGen rhs) {
-            return a -> {
-                var x = lhs.generate(ValueCategory.Val);
-                x.add(rhs.generate(a));
-                return x;
-            };
-        } */
+        static ExprsGen of(ExprGen val1, ExprGen val2) {
+            return add(of(val1), of(val2));
+        }
 
         static ExprsGen add(ExprsGen lhs, ExprsGen rhs) {
             return a -> {
@@ -383,21 +401,26 @@ public class LamaNodeFactory {
         lexicalScope.addLocal(name.getText(), init == null ? null : init.generate(ValueCategory.Val));
     }
 
-    ExprGen finishBlock(ExprsGen body) {
-        var scope = (LexicalBlockScope) lexicalScope;
-        var initNodes = scope.initNodes;
-        lexicalScope = lexicalScope.outer;
-
+    ExprGen finishSeq(ExprsGen body) {
         return a -> {
             var bodyNodes = body.generate(a);
             if (containsNull(bodyNodes.stream())) {
                 return null;
             }
 
-            return new BlockNode(
-                    Stream.concat(initNodes.stream(), bodyNodes.stream()).toArray(LamaNode[]::new)
-            );
+            return new BlockNode(bodyNodes.toArray(LamaNode[]::new));
         };
+    }
+
+    ExprGen finishBlock(ExprsGen body) {
+        var scope = (LexicalBlockScope) lexicalScope;
+        var initNodes = scope.initNodes;
+        lexicalScope = lexicalScope.outer;
+
+        return finishSeq(ExprsGen.add(
+                a -> initNodes,
+                body
+        ));
     }
 
     ExprGen finishFunction(ExprGen body, Token t) {
@@ -422,7 +445,8 @@ public class LamaNodeFactory {
 
     RootCallTarget finishMain(ExprGen body, Token t) {
         var main = finishFunction(body, t);
-        var mainNode = createCall(main, List.of(), t).generate(ValueCategory.Val);
+        var mainNode = finishSeq(ExprsGen.of(createCall(main, List.of(), t), a -> new IntLiteralNode(0)))
+                .generate(ValueCategory.Val);
         if (mainNode == null) {
             return null;
         }
@@ -460,7 +484,7 @@ public class LamaNodeFactory {
         var lookup = lexicalScope.find(name.getText());
         return a -> {
             if (lookup == null) {
-                throw newSemErr(name, String.format("variable not in scope: '%s'", name.getText()));
+                throw newSemErr(name, "variable not in scope");
             }
             return lookup.generate(a);
         };
@@ -476,6 +500,20 @@ public class LamaNodeFactory {
 
             return assertValue(a, new InvokeNode(functionNode, parameterNodes), t);
         };
+    }
+
+    ExprGen createIfThenElse(ExprGen condition, ExprGen then, ExprGen elsePart) {
+        return a ->
+                IfNodeFactory.create(
+                        condition.generate(ValueCategory.Val),
+                        then.generate(a),
+                        elsePart == null ? null : elsePart.generate(a)
+                );
+    }
+
+    ExprGen createWhileDo(ExprGen condition, ExprGen body) {
+        return a ->
+            new WhileNode(condition.generate(ValueCategory.Val), body.generate(a));
     }
 
     private static boolean containsNull(Stream<?> stream) {

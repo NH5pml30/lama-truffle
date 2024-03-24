@@ -40,11 +40,7 @@
  */
 package com.oracle.truffle.lama.launcher;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintStream;
+import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -71,18 +67,20 @@ public final class LamaMain {
             } else if (parseOption(options, arg)) {
                 continue;
             } else {
-                if (file == null) {
-                    file = arg;
-                }
+                file = arg;
             }
         }
 
         if (file == null) {
+            if (launcherOutput) {
+                System.out.println("== input source:");
+            }
+
             // @formatter:off
-            source = Source.newBuilder(LAMA, new InputStreamReader(System.in), "<stdin>").interactive(!launcherOutput).build();
+            source = Source.newBuilder(LAMA, new InputStreamReader(System.in), "<stdin>").interactive(false).build();
             // @formatter:on
         } else {
-            source = Source.newBuilder(LAMA, new File(file)).interactive(!launcherOutput).build();
+            source = Source.newBuilder(LAMA, new File(file)).interactive(false).build();
         }
 
         System.exit(executeSource(source, System.in, System.out, options, launcherOutput));
@@ -109,8 +107,8 @@ public final class LamaMain {
             //    return 1;
             //}
             if (launcherOutput && !result.isNull()) {
-                out.println("okay");
-                out.println(result.toString());
+                // out.println("okay");
+                // out.println(result.toString());
             }
             return 0;
         } catch (PolyglotException ex) {
@@ -152,5 +150,4 @@ public final class LamaMain {
         options.put(key, value);
         return true;
     }
-
 }
