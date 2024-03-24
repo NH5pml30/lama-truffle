@@ -66,7 +66,6 @@ public abstract class BuiltinNode extends LamaNode {
             argumentNodes[i] = ReadArgumentNodeFactory.create(i);
         }
         BuiltinNode node = factory.createNode((Object) argumentNodes);
-        return new LamaRootNode(language, frameDescriptor, new LamaNode[]{node})
-                .getCallTarget();
+        return new LamaRootNode(language, frameDescriptor, node).getCallTarget();
     }
 }

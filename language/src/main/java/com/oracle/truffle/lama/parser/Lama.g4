@@ -117,9 +117,10 @@ importStt :
     'import' UIDENT ';'
 ;
 
-scopeExpression returns [ExprsGen result] :
-    definition* { $result = ExprsGen.of(); }
-    expression? { $result = $expression.result; }
+scopeExpression returns [ExprGen result] :
+    { factory.startBlock(); }
+    definition*
+    expression  { $result = factory.finishBlock($expression.result); } // TODO: fix null?
 ;
 
 definition :
@@ -162,8 +163,8 @@ functionArguments returns [List<Token> result] :
     )?
 ;
 
-functionBody returns [ExprsGen result] :
-    '{' scopeExpression '}' { $result = $scopeExpression.result; }
+functionBody returns [ExprGen result] :
+    '{' scopeExpression? '}' { $result = $scopeExpression.result; } // TODO: fix null?
 ;
 
 expression returns [ExprsGen result] :
@@ -189,9 +190,9 @@ primaryExpression returns [ExprGen result] :
         |
         '(' { List<ExprGen> args = new ArrayList<ExprGen>(); }
             (
-                basicExpression[0] { args.add($basicExpression.result); } // TODO: fix to expression
+                scopeExpression { args.add($scopeExpression.result); }
                 (
-                    ',' basicExpression[0] { args.add($basicExpression.result); } // TODO: fix to expression
+                    ',' scopeExpression { args.add($scopeExpression.result); }
                 )*
             )?
         t=')' { $result = factory.createCall($result, args, $t); }
@@ -212,7 +213,7 @@ primary returns [ExprGen result] :
     |
     'skip' |
     UNARY basicExpression[0] |
-    '(' basicExpression[0] ')' { $result = $basicExpression.result; } | // TODO: fix to scope expression
+    '(' scopeExpression ')' { $result = $scopeExpression.result; } |
     // listExpression |
     // arrayExpression |
     // sExpression |
