@@ -48,9 +48,7 @@ grammar Lama;
 @parser::header
 {
 // DO NOT MODIFY - generated from Lama.g4 using "mx create-sl-parser"
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.RootCallTarget;
@@ -109,7 +107,7 @@ public static CallTarget parseLama(LamaLanguage language, Source source) {
 
 compilationUnit returns [CallTarget result] :
     importStt*      { factory.startMain(); }
-    scopeExpression { $result = factory.finishMain($scopeExpression.result, _input.LT(1)); }
+    functionBody    { $result = factory.finishMain($functionBody.result, _input.LT(1)); }
     EOF
 ;
 
@@ -117,15 +115,22 @@ importStt :
     'import' UIDENT ';'
 ;
 
+scopeDefinitions returns [Map<String, ExprGen> result] :
+    { $result = new HashMap<String, ExprGen>(); }
+    (
+        definition { $result.putAll($definition.result); }
+    )*
+;
+
 scopeExpression returns [ExprGen result] :
     { factory.startBlock(); }
-    definition*
+    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
     expression  { $result = factory.finishBlock($expression.result); }
 ;
 
 scopeExpression0 returns [ExprGen result] :
     { factory.startBlock(); }
-    definition*
+    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
     { ExprsGen gen = ExprsGen.of(); }
     (
         expression
@@ -134,34 +139,36 @@ scopeExpression0 returns [ExprGen result] :
     { $result = factory.finishBlock(gen); }
 ;
 
-definition :
-    variableDefinition |
-    functionDefinition
+definition returns [Map<String, ExprGen> result] :
+    variableDefinition { $result = $variableDefinition.result; } |
+    functionDefinition { $result = $functionDefinition.result; }
 ;
 
-variableDefinition :
+variableDefinition returns [Map<String, ExprGen> result] :
     ('var' | 'public')
-    variableDefinitionSequence ';'
+    variableDefinitionSequence ';' { $result = $variableDefinitionSequence.result; }
 ;
 
-variableDefinitionSequence :
-    variableDefinitionItem
+variableDefinitionSequence returns [Map<String, ExprGen> result] :
+    { $result = new HashMap<String, ExprGen>(); }
+    variableDefinitionItem { $result.put($variableDefinitionItem.name, $variableDefinitionItem.value); }
     (
-        ',' variableDefinitionItem
+        ',' variableDefinitionItem { $result.put($variableDefinitionItem.name, $variableDefinitionItem.value); }
     )*
 ;
 
-variableDefinitionItem :
-    LIDENT { factory.addLocal($LIDENT, null); }
+variableDefinitionItem returns [String name, ExprGen value] :
+    LIDENT { $name = $LIDENT.getText(); $value = a -> null; }
     |
-    LIDENT '=' basicExpression[0] { factory.addLocal($LIDENT, $basicExpression.result); }
+    LIDENT '=' basicExpression[0] { $name = $LIDENT.getText(); $value = $basicExpression.result; }
 ;
 
-functionDefinition :
+functionDefinition returns [Map<String, ExprGen> result] :
+    { $result = new HashMap<String, ExprGen>(); }
     'public'?
     t='fun' name=LIDENT
     '(' functionArguments ')' { factory.startFunction($functionArguments.result); }
-    functionBody              { factory.addLocal($name, factory.finishFunction($functionBody.result, $t)); }
+    '{' functionBody '}'      { $result.put($name.getText(), factory.finishFunction($functionBody.result, $t)); }
 ;
 
 functionArguments returns [List<Token> result] :
@@ -174,8 +181,13 @@ functionArguments returns [List<Token> result] :
     )?
 ;
 
-functionBody returns [ExprGen result] :
-    '{' scopeExpression0 '}' { $result = $scopeExpression0.result; }
+functionBody returns [ExprsGen result] :
+    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
+    { $result = ExprsGen.of(); }
+    (
+        expression
+        { $result = $expression.result; }
+    )?
 ;
 
 expression returns [ExprsGen result] :
@@ -220,9 +232,10 @@ primary returns [ExprGen result] :
     |
     t='fun' '('
     functionArguments { factory.startFunction($functionArguments.result); }
-    ')' functionBody  { $result = factory.finishFunction($functionBody.result, $t); }
+    ')' '{' functionBody '}'  { $result = factory.finishFunction($functionBody.result, $t); }
     |
-    'skip' |
+    'skip' { $result = a -> null; } |
+    op=OP d=DECIMAL { $result = factory.createIntLiteral($op, $d); } |
     OP basicExpression[0] |
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
     // listExpression |
@@ -230,15 +243,15 @@ primary returns [ExprGen result] :
     // sExpression |
     ifExpression { $result = $ifExpression.result; } |
     whileDoExpression { $result = $whileDoExpression.result; } |
-    doWhileExpression |
-    forExpression // |
+    doWhileExpression { $result = $doWhileExpression.result; } |
+    forExpression { $result = $forExpression.result; } // |
     // caseExpression
 ;
 
 ifExpression returns [ExprGen result] :
     { ExprGen falsePart = null; }
     'if' expression
-    'then' scopeExpression
+    'then' scopeExpression // TODO: check if it should be a parser error if the block is empty, but assignment happens
     (
         elsePart { falsePart = $elsePart.result; }
     )?
@@ -259,23 +272,42 @@ elsePart returns [ExprGen result] :
 ;
 
 whileDoExpression returns [ExprGen result] :
-    'while' expression
+    t='while' expression
     'do' scopeExpression
-    { $result = factory.createWhileDo(factory.finishSeq($expression.result), $scopeExpression.result); }
+    { $result = factory.createWhileDo(factory.finishSeq($expression.result), $scopeExpression.result, $t); }
     'od'
 ;
 
-doWhileExpression :
-    'do' scopeExpression
-    'while' expression
+doWhileExpression returns [ExprGen result] :
+    t='do' { factory.startBlock(); }
+    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); }
+    { factory.startBlock(); factory.addLocalValues($defs.result); }
+    { ExprsGen body = ExprsGen.of(); }
+    (
+        expression { body = $expression.result; }
+    )?
+    { ExprGen bodyNode = factory.finishBlock(body); }
+    'while' cond=expression
+    { $result = factory.finishBlock(ExprsGen.of(
+              factory.createDoWhile(bodyNode, factory.finishSeq($cond.result), $t)
+      )); }
     'od'
 ;
 
-forExpression :
-    'for' scopeExpression
-    ',' expression
-    ',' expression
-    'do' scopeExpression
+forExpression returns [ExprGen result] :
+    t='for' { factory.startBlock(); }
+    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
+    { ExprsGen init = ExprsGen.of(); }
+    (
+        expression { init = $expression.result; }
+    )?
+    { ExprGen initNode = factory.finishSeq(init); }
+    ',' cond=expression
+    ',' step=expression
+    'do' scopeExpression0
+    { $result = factory.finishBlock(ExprsGen.of(
+              factory.createForLoop(initNode, factory.finishSeq($cond.result), factory.finishSeq($step.result), $scopeExpression0.result, $t)
+      )); }
     'od'
 ;
 
@@ -499,11 +531,11 @@ fragment LETTER : [A-Z] | [a-z] | '_';
 fragment DIGIT : [0-9];
 fragment STRING_CHAR : ~'"' | '""';
 fragment CHAR_CHAR : ~'\'' | '\'\'' | '\\n' | '\\t';
-fragment OP_CHAR : [+\-*/=<>:@#!%];
+fragment OP_CHAR : [+\-*/:=<>!&%];
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
-DECIMAL : '-'? DIGIT+;
+DECIMAL : DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
 OP : OP_CHAR+;

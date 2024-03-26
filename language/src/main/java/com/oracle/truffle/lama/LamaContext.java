@@ -3,6 +3,7 @@ package com.oracle.truffle.lama;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
+import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.lama.LamaLanguage;
 
@@ -34,6 +35,14 @@ public class LamaContext {
 
     public PrintStream getOutput() {
         return out;
+    }
+
+    public MaterializedFrame getGlobalScope() {
+        return language.globalScope;
+    }
+
+    public void setGlobalScope(MaterializedFrame scope) {
+        language.globalScope = scope;
     }
 
     private static final ContextReference<LamaContext> REFERENCE = ContextReference.create(LamaLanguage.class);
