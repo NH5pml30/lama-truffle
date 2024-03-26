@@ -209,22 +209,32 @@ basicExpression [int _p] returns [ExprGen result] :
 primaryExpression returns [ExprGen result] :
     primary { $result = $primary.result; }
     (
-        '[' expression ']' // TODO: fix
+        '[' expression ']' { $result = factory.createElement($result, factory.finishSeq($expression.result)); }
         |
-        '(' { List<ExprGen> args = new ArrayList<ExprGen>(); }
-            (
-                scopeExpression { args.add($scopeExpression.result); }
-                (
-                    ',' scopeExpression { args.add($scopeExpression.result); }
-                )*
-            )?
-        t=')' { $result = factory.createCall($result, args, $t); }
+        functionArgs { $result = factory.createCall($result, $functionArgs.args, $functionArgs.t); }
+        |
+        t='.' LIDENT { List<ExprGen> args = new ArrayList<ExprGen>(); args.add($result); }
+        (
+            functionArgs { args.addAll($functionArgs.args); }
+        )?
+        { $result = factory.createCall(factory.createRead($LIDENT), args, $t); }
     )*
+;
+
+functionArgs returns [List<ExprGen> args, Token t] :
+    tt='(' { $args = new ArrayList<ExprGen>(); $t = $tt; }
+    (
+        scopeExpression { $args.add($scopeExpression.result); }
+        (
+            ',' scopeExpression { $args.add($scopeExpression.result); }
+        )*
+    )?
+    ')'
 ;
 
 primary returns [ExprGen result] :
     d=DECIMAL { $result = factory.createIntLiteral($d); } |
-    STRING |
+    s=STRING { $result = factory.createStringLiteral($s); } |
     CHAR |
     i=LIDENT { $result = factory.createRead($i); } |
     'true' |

@@ -50,6 +50,7 @@ import java.util.stream.Stream;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.FrameSlotKind;
+import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.nodes.*;
 import com.oracle.truffle.lama.nodes.builtins.*;
@@ -186,7 +187,8 @@ public class LamaNodeFactory {
                             .map(e -> Map.entry(e.getKey(), e.getValue().factory)),
                     Map.of(
                             "write", WriteNodeFactory.getInstance(),
-                            "read", ReadNodeFactory.getInstance()
+                            "read", ReadNodeFactory.getInstance(),
+                            "length", LengthNodeFactory.getInstance()
                     ).entrySet().stream()
             ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
@@ -542,6 +544,13 @@ public class LamaNodeFactory {
                 assertValue(a, new IntLiteralNode(Integer.parseInt(opLiteral.getText() + intLiteral.getText())), opLiteral);
     }
 
+    ExprGen createStringLiteral(Token strLiteral) {
+        String quotedLit = strLiteral.getText();
+        String lit = quotedLit.substring(1, quotedLit.length() - 1).replace("\"\"", "\"");
+        return a ->
+                assertValue(a, new StringLiteralNode(lit), strLiteral);
+    }
+
     ExprGen createBinary(Token opToken, ExprGen left, ExprGen right) {
         return a -> {
             var leftNode = left.generate(op2cat(opToken));
@@ -573,6 +582,20 @@ public class LamaNodeFactory {
                 throw newSemErr(name, "variable not in scope");
             }
             return lookup.generate(a);
+        };
+    }
+
+    ExprGen createElement(ExprGen arr, ExprGen index) {
+        return a -> {
+            var valueNode = arr.generate(ValueCategory.Val);
+            var indexNode = index.generate(ValueCategory.Val);
+            if (valueNode == null || indexNode == null) {
+                return null;
+            }
+            return switch (a) {
+                case Val -> ReadElementNodeFactory.create(valueNode, indexNode);
+                case Ref -> LamaRef.stringElement(valueNode, indexNode);
+            };
         };
     }
 

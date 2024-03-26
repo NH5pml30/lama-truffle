@@ -45,7 +45,6 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
-@NodeInfo(shortName = "const")
 public final class IntLiteralNode extends LamaNode {
     private final int value;
 
@@ -54,17 +53,7 @@ public final class IntLiteralNode extends LamaNode {
     }
 
     @Override
-    public int executeInt(VirtualFrame frame) throws UnexpectedResultException {
-        return value;
-    }
-
-    @Override
     public Object execute(VirtualFrame frame) {
         return value;
-    }
-
-    @Override
-    public String toString() {
-        return Integer.toString(value);
     }
 }

@@ -38,12 +38,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package com.oracle.truffle.lama.nodes;
+package com.oracle.truffle.lama.nodes.expression;
 
-import com.oracle.truffle.api.dsl.TypeSystem;
-import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.lama.nodes.LamaNode;
 
-@TypeSystem({int.class, LamaFunction.class, LamaRef.class, char[].class, MaterializedFrame.class})
-public abstract class LamaTypes {
+public final class StringLiteralNode extends LamaNode {
+    private final String value;
+
+    public StringLiteralNode(String value) {
+        this.value = value;
+    }
+
+    @Override
+    public Object execute(VirtualFrame frame) {
+        return value.toCharArray();
+    }
 }

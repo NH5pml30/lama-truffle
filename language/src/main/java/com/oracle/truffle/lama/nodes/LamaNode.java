@@ -57,8 +57,8 @@ public abstract class LamaNode extends Node {
         return LamaTypesGen.expectInteger(this.execute(virtualFrame));
     }
 
-    public TruffleString executeString(VirtualFrame virtualFrame) throws UnexpectedResultException {
-        return LamaTypesGen.expectTruffleString(this.execute(virtualFrame));
+    public char[] executeCharArray(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectCharArray(this.execute(virtualFrame));
     }
 
     public LamaFunction executeLamaFunction(VirtualFrame virtualFrame) throws UnexpectedResultException {

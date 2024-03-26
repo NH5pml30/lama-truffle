@@ -1,16 +1,20 @@
 package com.oracle.truffle.lama.nodes;
 
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.LamaContext;
 import com.oracle.truffle.lama.nodes.LamaRefFactory.RefNodeFactory;
 import com.oracle.truffle.lama.nodes.LamaRefFactory.GlobalRefNodeFactory;
+import com.oracle.truffle.lama.nodes.LamaRefFactory.StringElementRefNodeFactory;
 
 public abstract class LamaRef {
     public abstract Object assign(VirtualFrame frame, Object val);
+
     // TODO: unify logic with reading
     static class GlobalRef extends LamaRef {
         public final LamaContext ctx;
@@ -71,6 +75,23 @@ public abstract class LamaRef {
         }
     }
 
+    static class StringElementRef extends LamaRef {
+        public final char[] value;
+        public final int index;
+
+        StringElementRef(char[] value, int index) {
+            this.value = value;
+            this.index = index;
+        }
+
+        @Override
+        public Object assign(VirtualFrame frame, Object val) {
+            int castValue = (int) val;
+            value[index] = (char) castValue;
+            return castValue;
+        }
+    }
+
     @NodeField(name = "ref", type = LamaRef.class)
     @GenerateNodeFactory
     static abstract class RefNode extends LamaNode {
@@ -89,6 +110,16 @@ public abstract class LamaRef {
         }
     }
 
+    @NodeChild(value = "value", type = LamaNode.class)
+    @NodeChild(value = "index", type = LamaNode.class)
+    @GenerateNodeFactory
+    static abstract class StringElementRefNode extends LamaNode {
+        @Specialization
+        LamaRef get(char[] value, int index) {
+            return new StringElementRef(value, index);
+        }
+    }
+
     public static LamaNode local(int slot) {
         return RefNodeFactory.create(new LocalRef(slot));
     }
@@ -103,5 +134,9 @@ public abstract class LamaRef {
 
     public static LamaNode global(int slot) {
         return GlobalRefNodeFactory.create(slot);
+    }
+
+    public static LamaNode stringElement(LamaNode value, LamaNode index) {
+        return StringElementRefNodeFactory.create(value, index);
     }
 }
