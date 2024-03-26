@@ -11,7 +11,6 @@ import static com.oracle.truffle.lama.parser.LamaParser.parseLama;
 public class LamaLanguage extends TruffleLanguage<LamaContext> {
     public static final String ID = "lama";
     public static final String MIME_TYPE = "application/x-lama";
-    public MaterializedFrame globalScope;
 
     @Override
     protected LamaContext createContext(Env env) {

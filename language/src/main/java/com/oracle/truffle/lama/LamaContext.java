@@ -16,6 +16,7 @@ public class LamaContext {
     private final LamaLanguage language;
     private final PrintStream out;
     private final Scanner inScanner;
+    private MaterializedFrame globalScope;
     @CompilerDirectives.CompilationFinal private TruffleLanguage.Env env;
 
     public LamaContext(LamaLanguage language, TruffleLanguage.Env env) {
@@ -38,11 +39,11 @@ public class LamaContext {
     }
 
     public MaterializedFrame getGlobalScope() {
-        return language.globalScope;
+        return globalScope;
     }
 
     public void setGlobalScope(MaterializedFrame scope) {
-        language.globalScope = scope;
+        globalScope = scope;
     }
 
     private static final ContextReference<LamaContext> REFERENCE = ContextReference.create(LamaLanguage.class);
