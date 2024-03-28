@@ -44,6 +44,6 @@ import com.oracle.truffle.api.dsl.TypeSystem;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.strings.TruffleString;
 
-@TypeSystem({int.class, LamaFunction.class, LamaRef.class, char[].class, MaterializedFrame.class})
+@TypeSystem({int.class, LamaFunction.class, LamaRef.class, char[].class, Object[].class, MaterializedFrame.class})
 public abstract class LamaTypes {
 }

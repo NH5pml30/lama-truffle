@@ -50,4 +50,9 @@ public abstract class LengthNode extends BuiltinNode {
     protected int length(char[] s) {
         return s.length;
     }
+
+    @Specialization
+    protected int length(Object[] a) {
+        return a.length;
+    }
 }

@@ -17,4 +17,9 @@ public abstract class ReadElementNode extends LamaNode {
     public int read(char[] str, int index) {
         return str[index];
     }
+
+    @Specialization
+    public Object read(Object[] arr, int index) {
+        return arr[index];
+    }
 }

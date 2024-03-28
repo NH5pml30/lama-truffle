@@ -235,7 +235,7 @@ functionArgs returns [List<ExprGen> args, Token t] :
 primary returns [ExprGen result] :
     d=DECIMAL { $result = factory.createIntLiteral($d); } |
     s=STRING { $result = factory.createStringLiteral($s); } |
-    CHAR |
+    c=CHAR { $result = factory.createCharLiteral($c); } |
     i=LIDENT { $result = factory.createRead($i); } |
     'true' |
     'false'
@@ -249,7 +249,7 @@ primary returns [ExprGen result] :
     OP basicExpression[0] |
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
     // listExpression |
-    // arrayExpression |
+    arrayExpression { $result = $arrayExpression.result; } |
     // sExpression |
     ifExpression { $result = $ifExpression.result; } |
     whileDoExpression { $result = $whileDoExpression.result; } |
@@ -319,6 +319,17 @@ forExpression returns [ExprGen result] :
               factory.createForLoop(initNode, factory.finishSeq($cond.result), factory.finishSeq($step.result), $scopeExpression0.result, $t)
       )); }
     'od'
+;
+
+arrayExpression returns [ExprGen result] :
+    t='[' { ExprsGen vals = ExprsGen.of(); }
+    (
+        expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        (
+            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        )*
+    )?
+    ']' { $result = factory.createArray(vals, $t); }
 ;
 
 /*

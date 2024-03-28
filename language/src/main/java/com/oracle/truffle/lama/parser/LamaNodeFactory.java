@@ -551,6 +551,12 @@ public class LamaNodeFactory {
                 assertValue(a, new StringLiteralNode(lit), strLiteral);
     }
 
+    ExprGen createCharLiteral(Token charLiteral) {
+        String quotedLit = charLiteral.getText();
+        String lit = quotedLit.substring(1, quotedLit.length() - 1);
+        return a -> assertValue(a, new IntLiteralNode(lit.charAt(0)), charLiteral);
+    }
+
     ExprGen createBinary(Token opToken, ExprGen left, ExprGen right) {
         return a -> {
             var leftNode = left.generate(op2cat(opToken));
@@ -594,7 +600,7 @@ public class LamaNodeFactory {
             }
             return switch (a) {
                 case Val -> ReadElementNodeFactory.create(valueNode, indexNode);
-                case Ref -> LamaRef.stringElement(valueNode, indexNode);
+                case Ref -> LamaRef.element(valueNode, indexNode);
             };
         };
     }
@@ -642,6 +648,11 @@ public class LamaNodeFactory {
                         ),
                         t
                 );
+    }
+
+    ExprGen createArray(ExprsGen vals, Token t) {
+        return a ->
+                assertValue(a, new ArrayNode(vals.generate(ValueCategory.Val).toArray(LamaNode[]::new)), t);
     }
 
     private static boolean containsNull(Stream<?> stream) {

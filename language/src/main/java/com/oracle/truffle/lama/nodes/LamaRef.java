@@ -8,9 +8,7 @@ import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.LamaContext;
-import com.oracle.truffle.lama.nodes.LamaRefFactory.RefNodeFactory;
-import com.oracle.truffle.lama.nodes.LamaRefFactory.GlobalRefNodeFactory;
-import com.oracle.truffle.lama.nodes.LamaRefFactory.StringElementRefNodeFactory;
+import com.oracle.truffle.lama.nodes.LamaRefFactory.*;
 
 public abstract class LamaRef {
     public abstract Object assign(VirtualFrame frame, Object val);
@@ -92,6 +90,21 @@ public abstract class LamaRef {
         }
     }
 
+    static class ArrayElementRef extends LamaRef {
+        public final Object[] value;
+        public final int index;
+
+        ArrayElementRef(Object[] value, int index) {
+            this.value = value;
+            this.index = index;
+        }
+
+        @Override
+        public Object assign(VirtualFrame frame, Object val) {
+            return value[index] = val;
+        }
+    }
+
     @NodeField(name = "ref", type = LamaRef.class)
     @GenerateNodeFactory
     static abstract class RefNode extends LamaNode {
@@ -113,10 +126,15 @@ public abstract class LamaRef {
     @NodeChild(value = "value", type = LamaNode.class)
     @NodeChild(value = "index", type = LamaNode.class)
     @GenerateNodeFactory
-    static abstract class StringElementRefNode extends LamaNode {
+    static abstract class ElementRefNode extends LamaNode {
         @Specialization
         LamaRef get(char[] value, int index) {
             return new StringElementRef(value, index);
+        }
+
+        @Specialization
+        LamaRef get(Object[] value, int index) {
+            return new ArrayElementRef(value, index);
         }
     }
 
@@ -136,7 +154,7 @@ public abstract class LamaRef {
         return GlobalRefNodeFactory.create(slot);
     }
 
-    public static LamaNode stringElement(LamaNode value, LamaNode index) {
-        return StringElementRefNodeFactory.create(value, index);
+    public static LamaNode element(LamaNode value, LamaNode index) {
+        return ElementRefNodeFactory.create(value, index);
     }
 }

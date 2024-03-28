@@ -16,4 +16,9 @@ public abstract class WriteElementNode extends LamaNode {
     int write(char[] lhs, int index, int rhs) {
         return lhs[index] = (char) rhs;
     }
+
+    @Specialization
+    Object write(Object[] lhs, int index, Object rhs) {
+        return lhs[index] = rhs;
+    }
 }
