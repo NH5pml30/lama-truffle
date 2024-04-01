@@ -46,7 +46,8 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
-import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.lama.runtime.LamaFunction;
+import com.oracle.truffle.lama.runtime.LamaSExp;
 
 @TypeSystemReference(LamaTypes.class)
 @NodeInfo(language = "Lama", description = "The abstract base node for all expressions")
@@ -57,8 +58,16 @@ public abstract class LamaNode extends Node {
         return LamaTypesGen.expectInteger(this.execute(virtualFrame));
     }
 
-    public char[] executeCharArray(VirtualFrame virtualFrame) throws UnexpectedResultException {
-        return LamaTypesGen.expectCharArray(this.execute(virtualFrame));
+    public StringBuilder executeStringBuilder(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectStringBuilder(this.execute(virtualFrame));
+    }
+
+    public Object[] executeObjectArray(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectObjectArray(this.execute(virtualFrame));
+    }
+
+    public LamaSExp executeLamaSExp(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectLamaSExp(this.execute(virtualFrame));
     }
 
     public LamaFunction executeLamaFunction(VirtualFrame virtualFrame) throws UnexpectedResultException {

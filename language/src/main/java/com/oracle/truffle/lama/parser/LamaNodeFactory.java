@@ -41,8 +41,8 @@
 package com.oracle.truffle.lama.parser;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -50,13 +50,16 @@ import java.util.stream.Stream;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.FrameSlotKind;
-import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.nodes.*;
 import com.oracle.truffle.lama.nodes.builtins.*;
 import com.oracle.truffle.lama.nodes.controlflow.*;
-import com.oracle.truffle.lama.nodes.local.*;
+import com.oracle.truffle.lama.nodes.controlflow.match.*;
+import com.oracle.truffle.lama.nodes.controlflow.match.pattern.*;
+import com.oracle.truffle.lama.nodes.scope.*;
 import com.oracle.truffle.lama.nodes.expression.*;
+import com.oracle.truffle.lama.runtime.LamaRef;
 import org.antlr.v4.runtime.Token;
 
 import com.oracle.truffle.api.frame.FrameDescriptor;
@@ -93,11 +96,15 @@ public class LamaNodeFactory {
         return new OpInfo<T>(factory);
     }
 
-    // All of the builtin binary operators
+    // All the builtin binary operators
     private static final List<Pair<OpType, Map<String, OpInfo<BuiltinNode>>>> BUILTIN_OPERATOR_INFO = Arrays.asList(
             Pair.create(
                     OpType.InfixRight,
                     Map.of(":=", opInfo(AssignNodeFactory.getInstance()))
+            ),
+            Pair.create(
+                    OpType.InfixRight,
+                    Map.of(":", opInfo(ConsNodeFactory.getInstance()))
             ),
             Pair.create(
                     OpType.InfixLeft,
@@ -188,21 +195,23 @@ public class LamaNodeFactory {
                     Map.of(
                             "write", WriteNodeFactory.getInstance(),
                             "read", ReadNodeFactory.getInstance(),
-                            "length", LengthNodeFactory.getInstance()
+                            "length", LengthNodeFactory.getInstance(),
+                            "string", StringNodeFactory.getInstance()
                     ).entrySet().stream()
             ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-    // Determine if expression should produce a reference or a value (different nodes) during parsing
-    interface GenInterface<T> {
-        T generate(ValueCategory cat);
+    interface GenInterface<T, R> {
+        R generate(T val);
     }
+
+    // Determine if expression should produce a reference or a value (different nodes) during parsing
+    interface CatGenInterface<T> extends GenInterface<ValueCategory, T> {}
 
     // Generates an expression as LamaNode depending on the value category
-    interface ExprGen extends GenInterface<LamaNode> {
-    }
+    interface ExprGen extends CatGenInterface<LamaNode> {}
 
     // Generates a list of expressions as List<LamaNode> depending on the value category
-    interface ExprsGen extends GenInterface<List<LamaNode>> {
+    interface ExprsGen extends CatGenInterface<List<LamaNode>> {
         static ExprsGen of() {
             return a -> new ArrayList<>();
         }
@@ -265,11 +274,41 @@ public class LamaNodeFactory {
             this.inits = inits;
         }
 
+        public interface FindResultGen extends ExprGen {
+            LamaNode generateVal();
+            LamaRef generateRef();
+
+            @Override
+            default LamaNode generate(ValueCategory a) {
+                if (a == ValueCategory.Val) {
+                    return generateVal();
+                } else {
+                    return LamaRef.refNode(generateRef());
+                }
+            }
+        }
+
+        protected FindResultGen findResultGen(LamaNode val, LamaRef ref) {
+            return new FindResultGen() {
+                @Override
+                public LamaNode generateVal() {
+                    return val;
+                }
+
+                @Override
+                public LamaRef generateRef() {
+                    return ref;
+                }
+            };
+        }
+
+        public record FindResult(FindResultGen result, boolean isGlobal) {}
+
         protected FindResult getLocal(int slot) {
             if (isGlobal()) {
-                return new FindResult(ifVal(ReadGlobalNodeFactory.create(slot), LamaRef.global(slot)), true);
+                return new FindResult(findResultGen(ReadGlobalNodeFactory.create(slot), LamaRef.global(slot)), true);
             }
-            return new FindResult(ifVal(ReadLocalNodeFactory.create(slot), LamaRef.local(slot)), false);
+            return new FindResult(findResultGen(ReadLocalNodeFactory.create(slot), LamaRef.local(slot)), false);
         }
 
         public void addLocalValue(String name, ExprGen value) {
@@ -296,8 +335,6 @@ public class LamaNodeFactory {
             return outer.addLocalSlot(name);
         }
 
-        public record FindResult(ExprGen result, boolean isGlobal) {}
-
         public FindResult find(String name) {
             // Try locals
             {
@@ -318,16 +355,6 @@ public class LamaNodeFactory {
             }
             return outer.find(name);
         }
-
-        protected ExprGen ifVal(LamaNode caseVal, LamaNode caseRef) {
-            return a -> {
-                if (a == ValueCategory.Val) {
-                    return caseVal;
-                } else {
-                    return caseRef;
-                }
-            };
-        }
     }
 
     // Function scope => block scope & arguments & closure
@@ -345,12 +372,12 @@ public class LamaNodeFactory {
             super(outer, inits);
         }
 
-        public ExprGen getArg(int index) {
-            return ifVal(ReadArgumentNodeFactory.create(index), LamaRef.arg(index));
+        public FindResultGen getArg(int index) {
+            return findResultGen(ReadArgumentNodeFactory.create(index), LamaRef.arg(index));
         }
 
         public FindResult getClosure(int slot) {
-            return new FindResult(ifVal(ReadClosureNodeFactory.create(slot), LamaRef.closure(slot)), false);
+            return new FindResult(findResultGen(ReadClosureNodeFactory.create(slot), LamaRef.closure(slot)), false);
         }
 
         @Override
@@ -544,9 +571,12 @@ public class LamaNodeFactory {
                 assertValue(a, new IntLiteralNode(Integer.parseInt(opLiteral.getText() + intLiteral.getText())), opLiteral);
     }
 
+    private static String fromStringLiteral(String quotedLit) {
+        return quotedLit.substring(1, quotedLit.length() - 1).replace("\"\"", "\"");
+    }
+
     ExprGen createStringLiteral(Token strLiteral) {
-        String quotedLit = strLiteral.getText();
-        String lit = quotedLit.substring(1, quotedLit.length() - 1).replace("\"\"", "\"");
+        String lit = fromStringLiteral(strLiteral.getText());
         return a ->
                 assertValue(a, new StringLiteralNode(lit), strLiteral);
     }
@@ -653,6 +683,96 @@ public class LamaNodeFactory {
     ExprGen createArray(ExprsGen vals, Token t) {
         return a ->
                 assertValue(a, new ArrayNode(vals.generate(ValueCategory.Val).toArray(LamaNode[]::new)), t);
+    }
+
+    ExprGen createSExp(String name, ExprsGen vals, Token t) {
+        return a ->
+                assertValue(a, new SExpNode(name, vals.generate(ValueCategory.Val).toArray(LamaNode[]::new)), t);
+    }
+
+    private static <T, R> R reduceRight(List<T> list, BiFunction<T, R, R> op, R accum) {
+        for (var x : list.reversed()) {
+            accum = op.apply(x, accum);
+        }
+        return accum;
+    }
+
+    ExprGen createList(ExprsGen vals, Token t) {
+        return a -> {
+            var els = vals.generate(a);
+            var list = LamaNodeFactory.<LamaNode, ExprGen>reduceRight(
+                    els,
+                    (lhs, rhs) -> b -> ConsNodeFactory.create(new LamaNode[]{lhs, rhs.generate(b)}),
+                    b -> new IntLiteralNode(0)
+            );
+            return assertValue(a, list.generate(a), t);
+        };
+    }
+
+    ExprGen createPatternMatch(ExprGen what, List<Pair<PatGen, ExprGen>> matches) {
+        return a -> {
+            var node = what.generate(ValueCategory.Val);
+            PatternMatchBaseNode match = PatternMatchEmptyNodeFactory.create(node);
+            for (var m : matches) {
+                match = PatternMatchNodeFactory.create(node, match, m.getLeft().apply(node), m.getRight().generate(a));
+            }
+            return match;
+        };
+    }
+
+    PatGen createSExpPattern(String name, List<PatGen> pats) {
+        return node -> PatternSExpNodeFactory.create(node, SExpNode.hashCode(name), pats);
+    }
+
+    PatGen createArrayPattern(List<PatGen> pats) {
+        return node -> PatternArrayNodeFactory.create(node, pats);
+    }
+
+    PatGen createBindPattern(Token name, PatGen pat) {
+        var nameText = name.getText();
+        var scope = lexicalScope;
+
+        // capture scope
+        return node -> {
+            if (!scope.locals.containsKey(nameText)) {
+                scope.addLocal(nameText);
+            }
+            return PatternBindNodeFactory.create(node, pat, scope.find(nameText).result().generateRef());
+        };
+    }
+
+    PatGen createWildcardPattern() {
+        return PatternWildcardNodeFactory::create;
+    }
+
+    PatGen createIntValPattern(int val) {
+        return node -> PatternIntValNodeFactory.create(node, val);
+    }
+    PatGen createIntValPattern(String str) {
+        return createIntValPattern(Integer.parseInt(str));
+    }
+
+    PatGen createStrValPattern(String strLiteral) {
+        String val = fromStringLiteral(strLiteral);
+        return node -> PatternStrValNodeFactory.create(node, val);
+    }
+
+    PatGen createConsPattern(PatGen lhs, PatGen rhs) {
+        return createSExpPattern(ConsNode.NAME, List.of(lhs, rhs));
+    }
+
+    PatGen createListPattern(List<PatGen> els) {
+        return reduceRight(els, this::createConsPattern, createIntValPattern(0));
+    }
+
+    PatGen createFunPattern() {
+        return PatternFunNodeFactory::create;
+    }
+    PatGen createValPattern() {
+        return PatternValNodeFactory::create;
+    }
+    PatGen createStrPattern() {
+        return PatternStrNodeFactory::create;
     }
 
     private static boolean containsNull(Stream<?> stream) {

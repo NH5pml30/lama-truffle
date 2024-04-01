@@ -40,18 +40,15 @@
  */
 package com.oracle.truffle.lama.nodes.builtins;
 
-import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.nodes.LamaNode;
-import com.oracle.truffle.lama.nodes.LamaFunction;
 import com.oracle.truffle.lama.nodes.LamaRootNode;
-import com.oracle.truffle.lama.nodes.local.ReadArgumentNodeFactory;
+import com.oracle.truffle.lama.nodes.scope.ReadArgumentNodeFactory;
 
 @NodeChild(value = "arguments", type = LamaNode[].class)
 @GenerateNodeFactory

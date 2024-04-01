@@ -1,4 +1,4 @@
-package com.oracle.truffle.lama.nodes.local;
+package com.oracle.truffle.lama.nodes.scope;
 
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeField;

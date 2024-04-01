@@ -1,4 +1,4 @@
-package com.oracle.truffle.lama.nodes;
+package com.oracle.truffle.lama.runtime;
 
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeChild;
@@ -6,25 +6,23 @@ import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.LamaContext;
-import com.oracle.truffle.lama.nodes.LamaRefFactory.*;
+import com.oracle.truffle.lama.nodes.LamaNode;
+import com.oracle.truffle.lama.runtime.LamaRefFactory.*;
 
 public abstract class LamaRef {
-    public abstract Object assign(VirtualFrame frame, Object val);
+    public abstract Object assign(LamaContext ctx, VirtualFrame frame, Object val);
 
     // TODO: unify logic with reading
     static class GlobalRef extends LamaRef {
-        public final LamaContext ctx;
         public final int slot;
 
-        GlobalRef(LamaContext ctx, int slot) {
-            this.ctx = ctx;
+        public GlobalRef(int slot) {
             this.slot = slot;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             ctx.getGlobalScope().setObject(slot, val);
             return val;
         }
@@ -33,12 +31,12 @@ public abstract class LamaRef {
     static class LocalRef extends LamaRef {
         public final int slot;
 
-        LocalRef(int slot) {
+        public LocalRef(int slot) {
             this.slot = slot;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             frame.setObject(slot, val);
             return val;
         }
@@ -47,12 +45,12 @@ public abstract class LamaRef {
     static class ArgRef extends LamaRef {
         public final int index;
 
-        ArgRef(int index) {
+        public ArgRef(int index) {
             this.index = index;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             frame.getArguments()[1 + index] = val;
             return val;
         }
@@ -61,12 +59,12 @@ public abstract class LamaRef {
     static class ClosureRef extends LamaRef {
         public final int slot;
 
-        ClosureRef(int slot) {
+        public ClosureRef(int slot) {
             this.slot = slot;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             var closure = (MaterializedFrame) frame.getArguments()[0];
             closure.setObject(slot, val);
             return val;
@@ -74,18 +72,18 @@ public abstract class LamaRef {
     }
 
     static class StringElementRef extends LamaRef {
-        public final char[] value;
+        public final StringBuilder value;
         public final int index;
 
-        StringElementRef(char[] value, int index) {
+        public StringElementRef(StringBuilder value, int index) {
             this.value = value;
             this.index = index;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             int castValue = (int) val;
-            value[index] = (char) castValue;
+            value.setCharAt(index, (char) castValue);
             return castValue;
         }
     }
@@ -94,13 +92,13 @@ public abstract class LamaRef {
         public final Object[] value;
         public final int index;
 
-        ArrayElementRef(Object[] value, int index) {
+        public ArrayElementRef(Object[] value, int index) {
             this.value = value;
             this.index = index;
         }
 
         @Override
-        public Object assign(VirtualFrame frame, Object val) {
+        public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             return value[index] = val;
         }
     }
@@ -114,21 +112,12 @@ public abstract class LamaRef {
         }
     }
 
-    @NodeField(name = "slot", type = int.class)
-    @GenerateNodeFactory
-    static abstract class GlobalRefNode extends LamaNode {
-        @Specialization
-        LamaRef get(int slot) {
-            return new GlobalRef(LamaContext.get(this), slot);
-        }
-    }
-
     @NodeChild(value = "value", type = LamaNode.class)
     @NodeChild(value = "index", type = LamaNode.class)
     @GenerateNodeFactory
     static abstract class ElementRefNode extends LamaNode {
         @Specialization
-        LamaRef get(char[] value, int index) {
+        LamaRef get(StringBuilder value, int index) {
             return new StringElementRef(value, index);
         }
 
@@ -138,20 +127,24 @@ public abstract class LamaRef {
         }
     }
 
-    public static LamaNode local(int slot) {
-        return RefNodeFactory.create(new LocalRef(slot));
+    public static LamaRef local(int slot) {
+        return new LocalRef(slot);
     }
 
-    public static LamaNode arg(int index) {
-        return RefNodeFactory.create(new ArgRef(index));
+    public static LamaRef arg(int index) {
+        return new ArgRef(index);
     }
 
-    public static LamaNode closure(int slot) {
-        return RefNodeFactory.create(new ClosureRef(slot));
+    public static LamaRef closure(int slot) {
+        return new ClosureRef(slot);
     }
 
-    public static LamaNode global(int slot) {
-        return GlobalRefNodeFactory.create(slot);
+    public static LamaRef global(int slot) {
+        return new GlobalRef(slot);
+    }
+
+    public static LamaNode refNode(LamaRef ref) {
+        return RefNodeFactory.create(ref);
     }
 
     public static LamaNode element(LamaNode value, LamaNode index) {

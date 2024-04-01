@@ -1,4 +1,4 @@
-package com.oracle.truffle.lama.nodes.local;
+package com.oracle.truffle.lama.nodes.expression;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.Truffle;
@@ -9,6 +9,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.lama.nodes.LamaNode;
+import com.oracle.truffle.lama.nodes.expression.ClosureNodeFactory;
 
 import java.util.List;
 import java.util.Map;

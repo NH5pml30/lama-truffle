@@ -44,15 +44,21 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.lama.runtime.LamaSExp;
 
 public abstract class LengthNode extends BuiltinNode {
     @Specialization
-    protected int length(char[] s) {
-        return s.length;
+    protected int length(StringBuilder s) {
+        return s.length();
     }
 
     @Specialization
     protected int length(Object[] a) {
         return a.length;
+    }
+
+    @Specialization
+    protected int length(LamaSExp s) {
+        return s.children().length;
     }
 }

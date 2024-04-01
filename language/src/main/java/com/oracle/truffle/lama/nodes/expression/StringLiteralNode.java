@@ -55,6 +55,6 @@ public final class StringLiteralNode extends LamaNode {
 
     @Override
     public Object execute(VirtualFrame frame) {
-        return value.toCharArray();
+        return new StringBuilder(value);
     }
 }

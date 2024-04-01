@@ -58,6 +58,9 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.LamaLanguage;
 import com.oracle.truffle.lama.parser.LamaNodeFactory.*;
+import com.oracle.truffle.lama.nodes.controlflow.match.PatGen;
+import org.graalvm.collections.Pair;
+
 }
 
 @lexer::header
@@ -201,7 +204,7 @@ basicExpression [int _p] returns [ExprGen result] :
     primaryExpression { $result = $primaryExpression.result; }
     (
         {factory.getPrecedence(_input.LT(1)) >= $_p}?
-        op=OP rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
+        op=(OP|':') rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
         { $result = factory.createBinary($op, $result, $rhs.result); }
     )*
 ;
@@ -246,16 +249,16 @@ primary returns [ExprGen result] :
     |
     'skip' { $result = a -> null; } |
     op=OP d=DECIMAL { $result = factory.createIntLiteral($op, $d); } |
-    OP basicExpression[0] |
+    OP basicExpression[0] | // TODO: fix!!!
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
-    // listExpression |
+    listExpression { $result = $listExpression.result; } |
     arrayExpression { $result = $arrayExpression.result; } |
-    // sExpression |
+    sExpression { $result = $sExpression.result; } |
     ifExpression { $result = $ifExpression.result; } |
     whileDoExpression { $result = $whileDoExpression.result; } |
     doWhileExpression { $result = $doWhileExpression.result; } |
-    forExpression { $result = $forExpression.result; } // |
-    // caseExpression
+    forExpression { $result = $forExpression.result; } |
+    caseExpression { $result = $caseExpression.result; }
 ;
 
 ifExpression returns [ExprGen result] :
@@ -332,6 +335,121 @@ arrayExpression returns [ExprGen result] :
     ']' { $result = factory.createArray(vals, $t); }
 ;
 
+sExpression returns [ExprGen result] :
+    t=UIDENT
+    { ExprsGen vals = ExprsGen.of(); }
+    (
+        '(' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        (
+            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        )*
+        ')'
+    )?
+    { $result = factory.createSExp($t.getText(), vals, $t); }
+;
+
+listExpression returns [ExprGen result] :
+    t='{'
+    { ExprsGen vals = ExprsGen.of(); }
+    (
+        expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        (
+            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        )*
+    )? '}'
+    { $result = factory.createList(vals, $t); }
+;
+
+caseExpression returns [ExprGen result] :
+    { factory.startBlock(); }
+    'case' expression
+    'of' caseBranches
+    'esac'
+    { $result = factory.finishBlock(
+              ExprsGen.of(factory.createPatternMatch(factory.finishSeq($expression.result), $caseBranches.result))
+      ); }
+;
+
+caseBranches returns [List<Pair<PatGen, ExprGen>> result] :
+    { $result = new ArrayList<>(); }
+    caseBranch { $result.add(Pair.create($caseBranch.pat, $caseBranch.returns)); }
+    (
+        '|' caseBranch { $result.add(Pair.create($caseBranch.pat, $caseBranch.returns)); }
+    )*
+;
+
+caseBranch returns [PatGen pat, ExprGen returns] :
+    pattern '->' scopeExpression { $pat = $pattern.result; $returns = $scopeExpression.result; }
+;
+
+pattern returns [PatGen result] :
+    simplePattern { $result = $simplePattern.result; } |
+    consPattern { $result = $consPattern.result; }
+;
+
+simplePattern returns [PatGen result] :
+    wildcardPattern { $result = $wildcardPattern.result; } |
+    sExpPattern { $result = $sExpPattern.result; } |
+    arrayPattern { $result = $arrayPattern.result; } |
+    listPattern { $result = $listPattern.result; }
+    |
+    name=LIDENT { PatGen bind = factory.createWildcardPattern(); }
+    ('@' pattern { bind = $pattern.result; } )?
+    { $result = factory.createBindPattern($name, bind); }
+    |
+    d=DECIMAL { $result = factory.createIntValPattern($d.getText()); } |
+    op=OP d=DECIMAL { $result = factory.createIntValPattern($op.getText() + $d.getText()); } |
+    s=STRING { $result = factory.createStrValPattern($s.getText()); }
+    |
+    '#fun' { $result = factory.createFunPattern(); } |
+    '#val' { $result = factory.createValPattern(); } |
+    '#str' { $result = factory.createStrPattern(); } |
+    '(' pattern ')' { $result = $pattern.result; }
+;
+
+consPattern returns [PatGen result] :
+    simplePattern ':' pattern { $result = factory.createConsPattern($simplePattern.result, $pattern.result); }
+;
+
+listPattern returns [PatGen result] :
+    '{'
+    { List<PatGen> pats = new ArrayList<>(); }
+    (
+        pattern { pats.add($pattern.result); }
+        (
+            ',' pattern { pats.add($pattern.result); }
+        )*
+    )? '}'
+    { $result = factory.createListPattern(pats); }
+;
+
+wildcardPattern returns [PatGen result] :
+    '_' { $result = factory.createWildcardPattern(); }
+;
+
+sExpPattern returns [PatGen result] :
+    t=UIDENT
+    { List<PatGen> pats = new ArrayList<>(); }
+    (
+        '(' pattern { pats.add($pattern.result); }
+        (
+            ',' pattern { pats.add($pattern.result); }
+        )*
+        ')'
+    )?
+    { $result = factory.createSExpPattern($t.getText(), pats); }
+;
+
+arrayPattern returns [PatGen result] :
+    '[' { List<PatGen> pats = new ArrayList<>(); }
+    (
+        pattern { pats.add($pattern.result); }
+        (
+            ',' pattern { pats.add($pattern.result); }
+        )*
+    )? ']'
+    { $result = factory.createArrayPattern(pats); }
+;
 /*
 function
 :
@@ -552,11 +670,11 @@ fragment LETTER : [A-Z] | [a-z] | '_';
 fragment DIGIT : [0-9];
 fragment STRING_CHAR : ~'"' | '""';
 fragment CHAR_CHAR : ~'\'' | '\'\'' | '\\n' | '\\t';
-fragment OP_CHAR : [+\-*/:=<>!&%];
+fragment OP_CHAR : [+\-*/=<>!&%];
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
 DECIMAL : DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
-OP : OP_CHAR+;
+OP : ':=' | OP_CHAR+;
