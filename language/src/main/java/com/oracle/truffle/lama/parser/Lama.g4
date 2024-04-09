@@ -57,6 +57,7 @@ import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.LamaLanguage;
+import com.oracle.truffle.lama.parser.LamaOperators.OpType;
 import com.oracle.truffle.lama.parser.LamaNodeFactory.*;
 import com.oracle.truffle.lama.nodes.controlflow.match.PatGen;
 import org.graalvm.collections.Pair;
@@ -118,23 +119,20 @@ importStt :
     'import' UIDENT ';'
 ;
 
-scopeDefinitions returns [Map<String, ExprGen> result] :
-    { $result = new HashMap<String, ExprGen>(); }
-    (
-        definition { $result.putAll($definition.result); }
-    )*
+scopeDefinitions :
+    definition*
 ;
 
-scopeExpression returns [ExprGen result] :
+scopeExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     { factory.startBlock(); }
-    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
+    scopeDefinitions
     expression  { $result = factory.finishBlock($expression.result); }
 ;
 
-scopeExpression0 returns [ExprGen result] :
+scopeExpression0 returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     { factory.startBlock(); }
-    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
-    { ExprsGen gen = ExprsGen.of(); }
+    scopeDefinitions
+    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> gen = GenInterfaces.of(); }
     (
         expression
         { gen = $expression.result; }
@@ -142,36 +140,35 @@ scopeExpression0 returns [ExprGen result] :
     { $result = factory.finishBlock(gen); }
 ;
 
-definition returns [Map<String, ExprGen> result] :
-    variableDefinition { $result = $variableDefinition.result; } |
-    functionDefinition { $result = $functionDefinition.result; }
+definition :
+    variableDefinition |
+    functionDefinition |
+    infixDefinition
 ;
 
-variableDefinition returns [Map<String, ExprGen> result] :
+variableDefinition :
     ('var' | 'public')
-    variableDefinitionSequence ';' { $result = $variableDefinitionSequence.result; }
+    variableDefinitionSequence ';'
 ;
 
-variableDefinitionSequence returns [Map<String, ExprGen> result] :
-    { $result = new HashMap<String, ExprGen>(); }
-    variableDefinitionItem { $result.put($variableDefinitionItem.name, $variableDefinitionItem.value); }
+variableDefinitionSequence :
+    variableDefinitionItem { factory.addLocal($variableDefinitionItem.name, $variableDefinitionItem.value); }
     (
-        ',' variableDefinitionItem { $result.put($variableDefinitionItem.name, $variableDefinitionItem.value); }
+        ',' variableDefinitionItem { factory.addLocal($variableDefinitionItem.name, $variableDefinitionItem.value); }
     )*
 ;
 
-variableDefinitionItem returns [String name, ExprGen value] :
-    LIDENT { $name = $LIDENT.getText(); $value = a -> null; }
+variableDefinitionItem returns [Token name, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> value] :
+    LIDENT { $name = $LIDENT; $value = factory.createSkip($LIDENT); }
     |
-    LIDENT '=' basicExpression[0] { $name = $LIDENT.getText(); $value = $basicExpression.result; }
+    LIDENT '=' basicExpression[0] { $name = $LIDENT; $value = $basicExpression.result; }
 ;
 
-functionDefinition returns [Map<String, ExprGen> result] :
-    { $result = new HashMap<String, ExprGen>(); }
+functionDefinition :
     'public'?
     t='fun' name=LIDENT
-    '(' functionArguments ')' { factory.startFunction($functionArguments.result); }
-    '{' functionBody '}'      { $result.put($name.getText(), factory.finishFunction($functionBody.result, $t)); }
+    '(' functionArguments ')' { factory.startFunction($functionArguments.result, $name.getText()); }
+    '{' functionBody '}'      { factory.addFun($name.getText(), factory.finishFunction($functionBody.result)); }
 ;
 
 functionArguments returns [List<Token> result] :
@@ -184,39 +181,58 @@ functionArguments returns [List<Token> result] :
     )?
 ;
 
-functionBody returns [ExprsGen result] :
-    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
-    { $result = ExprsGen.of(); }
+functionBody returns [GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    scopeDefinitions
+    { $result = GenInterfaces.of(); }
     (
         expression
         { $result = $expression.result; }
     )?
 ;
 
-expression returns [ExprsGen result] :
-    basicExpression[0] { $result = ExprsGen.of($basicExpression.result); }
-    |
-    basicExpression[0] { $result = ExprsGen.of($basicExpression.result); }
-    ';' expression     { $result = ExprsGen.add($result, $expression.result); }
+infixDefinition :
+    'public'? infixity name=OP level '('
+    functionArguments ')' { factory.startFunction($functionArguments.result, $name.getText()); }
+    '{' functionBody '}'  { factory.addFun($name.getText(), factory.finishFunction($functionBody.result)); }
+    // add operator eagerly for parsing
+    { factory.addOp($name, $infixity.result, $level.relOp, $level.rel); }
 ;
 
-basicExpression [int _p] returns [ExprGen result] :
+infixity returns [OpType result] :
+    'infix'  { $result = OpType.InfixNone; } |
+    'infixl' { $result = OpType.InfixLeft; } |
+    'infixr' { $result = OpType.InfixRight; }
+;
+
+level returns [Token relOp, int rel] :
+    ('at' { $rel = 0; } | 'before' { $rel = -1; } | 'after' { $rel = 1; })
+    OP { $relOp = $OP; }
+;
+
+expression returns [GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result); }
+    |
+    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result); }
+    ';' expression     { $result = GenInterfaces.concat(GenInterface.konst($result, ValueCategory.Val), $expression.result); }
+;
+
+basicExpression [int _p] returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     primaryExpression { $result = $primaryExpression.result; }
     (
         {factory.getPrecedence(_input.LT(1)) >= $_p}?
-        op=(OP|':') rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
+        op=OP rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
         { $result = factory.createBinary($op, $result, $rhs.result); }
     )*
 ;
 
-primaryExpression returns [ExprGen result] :
+primaryExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     primary { $result = $primary.result; }
     (
         '[' expression ']' { $result = factory.createElement($result, factory.finishSeq($expression.result)); }
         |
         functionArgs { $result = factory.createCall($result, $functionArgs.args, $functionArgs.t); }
         |
-        t='.' LIDENT { List<ExprGen> args = new ArrayList<ExprGen>(); args.add($result); }
+        t='.' LIDENT { List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args = new ArrayList<>(); args.add($result); }
         (
             functionArgs { args.addAll($functionArgs.args); }
         )?
@@ -224,8 +240,8 @@ primaryExpression returns [ExprGen result] :
     )*
 ;
 
-functionArgs returns [List<ExprGen> args, Token t] :
-    tt='(' { $args = new ArrayList<ExprGen>(); $t = $tt; }
+functionArgs returns [List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args, Token t] :
+    tt='(' { $args = new ArrayList<>(); $t = $tt; }
     (
         scopeExpression { $args.add($scopeExpression.result); }
         (
@@ -235,19 +251,20 @@ functionArgs returns [List<ExprGen> args, Token t] :
     ')'
 ;
 
-primary returns [ExprGen result] :
+primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     d=DECIMAL { $result = factory.createIntLiteral($d); } |
     s=STRING { $result = factory.createStringLiteral($s); } |
     c=CHAR { $result = factory.createCharLiteral($c); } |
     i=LIDENT { $result = factory.createRead($i); } |
     'true' |
-    'false'
+    'false' |
+    'infix' OP { $result = factory.createInfix($OP); }
     |
     t='fun' '('
-    functionArguments { factory.startFunction($functionArguments.result); }
-    ')' '{' functionBody '}'  { $result = factory.finishFunction($functionBody.result, $t); }
+    functionArguments { factory.startFunction($functionArguments.result, "<lambda>"); }
+    ')' '{' functionBody '}'  { $result = factory.genValue(factory.finishFunction($functionBody.result).instantiate(), $t); }
     |
-    'skip' { $result = a -> null; } |
+    t='skip' { $result = factory.createSkip($t); } |
     op=OP d=DECIMAL { $result = factory.createIntLiteral($op, $d); } |
     OP basicExpression[0] | // TODO: fix!!!
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
@@ -261,10 +278,11 @@ primary returns [ExprGen result] :
     caseExpression { $result = $caseExpression.result; }
 ;
 
-ifExpression returns [ExprGen result] :
-    { ExprGen falsePart = null; }
-    'if' expression
+ifExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> falsePart; }
+    t='if' expression
     'then' scopeExpression // TODO: check if it should be a parser error if the block is empty, but assignment happens
+    { falsePart = factory.createSkip($t); }
     (
         elsePart { falsePart = $elsePart.result; }
     )?
@@ -272,10 +290,11 @@ ifExpression returns [ExprGen result] :
     'fi'
 ;
 
-elsePart returns [ExprGen result] :
-    { ExprGen falsePart = null; }
-    'elif' expression
+elsePart returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> falsePart; }
+    t='elif' expression
     'then' scopeExpression
+    { falsePart = factory.createSkip($t); }
     (
         elsePart { falsePart = $elsePart.result; }
     )?
@@ -284,93 +303,90 @@ elsePart returns [ExprGen result] :
     'else' scopeExpression { $result = $scopeExpression.result; }
 ;
 
-whileDoExpression returns [ExprGen result] :
+whileDoExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     t='while' expression
     'do' scopeExpression
     { $result = factory.createWhileDo(factory.finishSeq($expression.result), $scopeExpression.result, $t); }
     'od'
 ;
 
-doWhileExpression returns [ExprGen result] :
-    t='do' { factory.startBlock(); }
-    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); }
-    { factory.startBlock(); factory.addLocalValues($defs.result); }
-    { ExprsGen body = ExprsGen.of(); }
+doWhileExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    t='do' { var scope = factory.startBlock(); }
+    defs=scopeDefinitions
+    { factory.startBlock(); factory.pullLocalValues(scope); }
+    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body = GenInterfaces.of(); }
     (
         expression { body = $expression.result; }
     )?
-    { ExprGen bodyNode = factory.finishBlock(body); }
+    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> bodyNode = factory.finishBlock(body); }
     'while' cond=expression
-    { $result = factory.finishBlock(ExprsGen.of(
+    { $result = factory.finishBlock(GenInterfaces.of(
               factory.createDoWhile(bodyNode, factory.finishSeq($cond.result), $t)
       )); }
     'od'
 ;
 
-forExpression returns [ExprGen result] :
+forExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     t='for' { factory.startBlock(); }
-    defs=scopeDefinitions { factory.addLocals($defs.result.keySet()); factory.addLocalValues($defs.result); }
-    { ExprsGen init = ExprsGen.of(); }
+    defs=scopeDefinitions
+    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> init = GenInterfaces.of(); }
     (
         expression { init = $expression.result; }
     )?
-    { ExprGen initNode = factory.finishSeq(init); }
+    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> initNode = factory.finishSeq(init); }
     ',' cond=expression
     ',' step=expression
     'do' scopeExpression0
-    { $result = factory.finishBlock(ExprsGen.of(
+    { $result = factory.finishBlock(GenInterfaces.of(
               factory.createForLoop(initNode, factory.finishSeq($cond.result), factory.finishSeq($step.result), $scopeExpression0.result, $t)
       )); }
     'od'
 ;
 
-arrayExpression returns [ExprGen result] :
-    t='[' { ExprsGen vals = ExprsGen.of(); }
+arrayExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    t='[' { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
     (
-        expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         (
-            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         )*
     )?
     ']' { $result = factory.createArray(vals, $t); }
 ;
 
-sExpression returns [ExprGen result] :
+sExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     t=UIDENT
-    { ExprsGen vals = ExprsGen.of(); }
+    { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
     (
-        '(' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        '(' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         (
-            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         )*
         ')'
     )?
     { $result = factory.createSExp($t.getText(), vals, $t); }
 ;
 
-listExpression returns [ExprGen result] :
+listExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     t='{'
-    { ExprsGen vals = ExprsGen.of(); }
+    { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
     (
-        expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         (
-            ',' expression { vals = ExprsGen.add(vals, factory.finishSeq($expression.result)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
         )*
     )? '}'
     { $result = factory.createList(vals, $t); }
 ;
 
-caseExpression returns [ExprGen result] :
-    { factory.startBlock(); }
+caseExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     'case' expression
     'of' caseBranches
     'esac'
-    { $result = factory.finishBlock(
-              ExprsGen.of(factory.createPatternMatch(factory.finishSeq($expression.result), $caseBranches.result))
-      ); }
+    { $result = factory.createPatternMatch(factory.finishSeq($expression.result), $caseBranches.result); }
 ;
 
-caseBranches returns [List<Pair<PatGen, ExprGen>> result] :
+caseBranches returns [List<Pair<PatGen, GenInterface<ValueCategory, GenInterface<Void, LamaNode>>>> result] :
     { $result = new ArrayList<>(); }
     caseBranch { $result.add(Pair.create($caseBranch.pat, $caseBranch.returns)); }
     (
@@ -378,8 +394,10 @@ caseBranches returns [List<Pair<PatGen, ExprGen>> result] :
     )*
 ;
 
-caseBranch returns [PatGen pat, ExprGen returns] :
-    pattern '->' scopeExpression { $pat = $pattern.result; $returns = $scopeExpression.result; }
+caseBranch returns [PatGen pat, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> returns] :
+    { factory.startBlock(); }
+    pattern { $pat = $pattern.result; } '->'
+    scopeExpression { $returns = factory.finishBlock(GenInterfaces.of($scopeExpression.result)); }
 ;
 
 pattern returns [PatGen result] :
@@ -393,7 +411,7 @@ simplePattern returns [PatGen result] :
     arrayPattern { $result = $arrayPattern.result; } |
     listPattern { $result = $listPattern.result; }
     |
-    name=LIDENT { PatGen bind = factory.createWildcardPattern(); }
+    name=LIDENT { factory.tryAddLocal($name, factory.createSkip($name)); PatGen bind = factory.createWildcardPattern(); }
     ('@' pattern { bind = $pattern.result; } )?
     { $result = factory.createBindPattern($name, bind); }
     |
@@ -408,7 +426,7 @@ simplePattern returns [PatGen result] :
 ;
 
 consPattern returns [PatGen result] :
-    simplePattern ':' pattern { $result = factory.createConsPattern($simplePattern.result, $pattern.result); }
+    simplePattern OP {$OP.getText().equals(":")}? pattern { $result = factory.createConsPattern($simplePattern.result, $pattern.result); }
 ;
 
 listPattern returns [PatGen result] :
@@ -670,11 +688,11 @@ fragment LETTER : [A-Z] | [a-z] | '_';
 fragment DIGIT : [0-9];
 fragment STRING_CHAR : ~'"' | '""';
 fragment CHAR_CHAR : ~'\'' | '\'\'' | '\\n' | '\\t';
-fragment OP_CHAR : [+\-*/=<>!&%];
+fragment OP_CHAR : [+\-*/:=<>!&%];
 
 UIDENT : ULETTER (LETTER | DIGIT)*;
 LIDENT : LLETTER (LETTER | DIGIT)*;
 DECIMAL : DIGIT+;
 STRING : '"' STRING_CHAR* '"';
 CHAR : '\'' CHAR_CHAR '\'';
-OP : ':=' | OP_CHAR+;
+OP : OP_CHAR+;

@@ -15,6 +15,7 @@ public abstract class ReadClosureNode extends LamaNode {
     @Specialization
     Object read(VirtualFrame frame) {
         var closure = (MaterializedFrame) frame.getArguments()[0];
+        System.err.format("Try to read slot '%d'\n", getSlot());
         return closure.getValue(getSlot());
     }
 }

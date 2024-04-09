@@ -56,6 +56,7 @@ public abstract class PatternArrayLikeNode extends PatternNode {
 
     @Fallback
     public int match(Object value) {
+        System.err.format("fallback on %s", value.toString());
         return 0;
     }
 }
