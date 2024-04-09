@@ -59,6 +59,7 @@ import com.oracle.truffle.lama.runtime.LamaRef;
 import org.antlr.v4.runtime.Token;
 
 import com.oracle.truffle.api.source.Source;
+import org.antlr.v4.runtime.TokenFactory;
 import org.graalvm.collections.Pair;
 
 import static com.oracle.truffle.lama.parser.LamaOperators.BUILTIN_OPERATOR_INFO;
@@ -151,15 +152,42 @@ public class LamaNodeFactory {
         lexicalScope.pullLocalValues(from);
     }
 
-    LexicalFuncScope startFunction(List<Token> arguments, String funName) {
-        return pushScope(outerScope -> {
+    void startFunction(List<String> arguments, String funName) {
+        pushScope(outerScope -> {
             var scope = new LexicalFuncScope(outerScope, funName);
             int index = 0;
             for (var arg : arguments) {
-                scope.addArgument(arg.getText(), index++);
+                scope.addArgument(arg, index++);
             }
             return scope;
         });
+    }
+
+    GenInterface<
+            GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>>,
+            GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>>
+            > startFunctionPat(List<PatGen> argumentsPats, String funName, Token t) {
+        List<String> arguments = new ArrayList<>();
+        pushScope(outerScope -> {
+            var scope = new LexicalFuncScope(outerScope, funName);
+            int index = 0;
+            for (var arg : argumentsPats) {
+                var name = freshName();
+                scope.addArgument(name, index++);
+                arguments.add(name);
+            }
+            return scope;
+        });
+        GenInterface<
+                GenInterface<ValueCategory, GenInterface<Void, LamaNode>>,
+                GenInterface<ValueCategory, GenInterface<Void, LamaNode>>
+                > r = x -> x;
+        for (int i = 0; i < argumentsPats.size(); i++) {
+            var pat = argumentsPats.get(i);
+            var name = arguments.get(i);
+            r = x -> createPatternMatch(createRead(name, t), List.of(Pair.create(pat, x)));
+        }
+        return GenInterface.map(GenInterface.compose(r, this::finishSeq), GenInterfaces::of);
     }
 
     void startMain() {
@@ -365,16 +393,20 @@ public class LamaNodeFactory {
         return createRead(opToken);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createRead(Token name) {
+    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createRead(String name, Token t) {
         var scope = lexicalScope;
 
         // capture scope
         return a -> {
-            var lookup = scope.find(name.getText()).orElseThrow(() -> newSemErr(name, "variable not in scope"))
+            var lookup = scope.find(name).orElseThrow(() -> newSemErr(t, "variable not in scope"))
                     .get();
             // System.err.format("Found for '%s': %s\n", name.getText(), Objects.toString(lookup));
             return GenInterface.konst(lookup, a);
         };
+    }
+
+    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createRead(Token name) {
+        return createRead(name.getText(), name);
     }
 
     GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createElement(
@@ -631,6 +663,10 @@ public class LamaNodeFactory {
     }
     PatGen createStrPattern() {
         return PatternStrNodeFactory::create;
+    }
+
+    String freshName() {
+        return "_" + java.util.UUID.randomUUID().toString().replace("-", "");
     }
 
     private static boolean containsNull(Stream<?> stream) {

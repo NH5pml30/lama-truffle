@@ -167,16 +167,35 @@ variableDefinitionItem returns [Token name, GenInterface<ValueCategory, GenInter
 functionDefinition :
     'public'?
     t='fun' name=LIDENT
-    '(' functionArguments ')' { factory.startFunction($functionArguments.result, $name.getText()); }
-    '{' functionBody '}'      { factory.addFun($name.getText(), factory.finishFunction($functionBody.result)); }
+    functionArgumentsAndBody[$name.getText(), $t] { factory.addFun($name.getText(), $functionArgumentsAndBody.result); }
 ;
 
-functionArguments returns [List<Token> result] :
-    { $result = new ArrayList<Token>(); }
+functionArgumentsAndBody [String name, Token t] returns [Fun result] :
     (
-        LIDENT         { $result.add($LIDENT); }
+        '(' functionArguments ')' { factory.startFunction($functionArguments.result, $name); }
+        '{' functionBody '}'      { $result = factory.finishFunction($functionBody.result); }
+    |
+        '(' functionPatArguments ')' { var c = factory.startFunctionPat($functionPatArguments.result, $name, $t); }
+        '{' functionBody '}'         { $result = factory.finishFunction(c.generate($functionBody.result)); }
+    )
+;
+
+functionArguments returns [List<String> result] :
+    { $result = new ArrayList<>(); }
+    (
+        LIDENT         { $result.add($LIDENT.getText()); }
         (
-            ',' LIDENT { $result.add($LIDENT); }
+            ',' LIDENT { $result.add($LIDENT.getText()); }
+        )*
+    )?
+;
+
+functionPatArguments returns [List<PatGen> result] :
+    { $result = new ArrayList<>(); }
+    (
+        pattern         { $result.add($pattern.result); }
+        (
+            ',' pattern { $result.add($pattern.result); }
         )*
     )?
 ;
@@ -191,9 +210,8 @@ functionBody returns [GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>>
 ;
 
 infixDefinition :
-    'public'? infixity name=OP level '('
-    functionArguments ')' { factory.startFunction($functionArguments.result, $name.getText()); }
-    '{' functionBody '}'  { factory.addFun($name.getText(), factory.finishFunction($functionBody.result)); }
+    'public'? infixity name=OP level
+    functionArgumentsAndBody[$name.getText(), $name] { factory.addFun($name.getText(), $functionArgumentsAndBody.result); }
     // add operator eagerly for parsing
     { factory.addOp($name, $infixity.result, $level.relOp, $level.rel); }
 ;
@@ -230,17 +248,17 @@ primaryExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNo
     (
         '[' expression ']' { $result = factory.createElement($result, factory.finishSeq($expression.result)); }
         |
-        functionArgs { $result = factory.createCall($result, $functionArgs.args, $functionArgs.t); }
+        functionParams { $result = factory.createCall($result, $functionParams.args, $functionParams.t); }
         |
         t='.' LIDENT { List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args = new ArrayList<>(); args.add($result); }
         (
-            functionArgs { args.addAll($functionArgs.args); }
+            functionParams { args.addAll($functionParams.args); }
         )?
         { $result = factory.createCall(factory.createRead($LIDENT), args, $t); }
     )*
 ;
 
-functionArgs returns [List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args, Token t] :
+functionParams returns [List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args, Token t] :
     tt='(' { $args = new ArrayList<>(); $t = $tt; }
     (
         scopeExpression { $args.add($scopeExpression.result); }
@@ -260,9 +278,9 @@ primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resul
     'false' |
     'infix' OP { $result = factory.createInfix($OP); }
     |
-    t='fun' '('
-    functionArguments { factory.startFunction($functionArguments.result, "<lambda>"); }
-    ')' '{' functionBody '}'  { $result = factory.genValue(factory.finishFunction($functionBody.result).instantiate(), $t); }
+    t='fun'
+    functionArgumentsAndBody["<lambda>", $t]
+    { $result = factory.genValue($functionArgumentsAndBody.result.instantiate(), $t); }
     |
     t='skip' { $result = factory.createSkip($t); } |
     op=OP d=DECIMAL { $result = factory.createIntLiteral($op, $d); } |
@@ -275,7 +293,8 @@ primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resul
     whileDoExpression { $result = $whileDoExpression.result; } |
     doWhileExpression { $result = $doWhileExpression.result; } |
     forExpression { $result = $forExpression.result; } |
-    caseExpression { $result = $caseExpression.result; }
+    caseExpression { $result = $caseExpression.result; } |
+    etaExpression { $result = $etaExpression.result; }
 ;
 
 ifExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
@@ -468,6 +487,18 @@ arrayPattern returns [PatGen result] :
     )? ']'
     { $result = factory.createArrayPattern(pats); }
 ;
+
+etaExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+    t='eta' { String synthName = factory.freshName(); factory.startFunction(List.of(synthName), "<eta>"); }
+    basicExpression[0]
+    {
+      var params = List.of(factory.createRead(synthName, $t));
+      var func = $basicExpression.result;
+      var fun = factory.finishFunction(GenInterfaces.of(factory.createCall(func, params, $t))).instantiate();
+      $result = factory.genValue(fun, $t);
+    }
+;
+
 /*
 function
 :

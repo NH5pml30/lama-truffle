@@ -11,7 +11,6 @@ import org.graalvm.collections.Pair;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -26,8 +25,12 @@ class LexicalScope {
     public final LamaOperators.OperatorInfo operatorInfo;
     protected GenInterfaces<Void, GenInterface<Void, LamaNode>> inits;
 
+    protected LexicalFuncScope getFuncScope() {
+        return outer.getFuncScope();
+    }
+
     public boolean isGlobal() {
-        return outer == null || outer.isGlobal();
+        return getFuncScope().isGlobal();
     }
 
     public LexicalScope(LexicalScope outer) {
@@ -84,18 +87,15 @@ class LexicalScope {
 
         abstract ExprGen get();
 
-        FindResult propagate(Closure through) {
-            System.err.format("Propagate '%s'\n", name);
-            return this;
-        }
+        abstract void propagate(LexicalFuncScope through, boolean isBinding);
     }
 
-    record Fun(Closure closure, ExprGen lambda) {
+    record Fun(Closure.Instantiation closure, ExprGen lambda) {
         ExprGen instantiate() {
             return a -> {
                 var lambdaNode = lambda.generate(ValueCategory.Val);
-                System.err.format("instantiate closure '%s' + lambda node '%s'\nClosure:\n", closure.toString(), lambdaNode.toString());
-                closure.print();
+                System.err.format("instantiate closure '%s' + lambda node '%s'\nClosure:\n", closure.getParent().toString(), lambdaNode.toString());
+                closure.getParent().print();
                 return closure.getNode()
                         .map(node -> (LamaNode) SetClosureNodeFactory.create(lambdaNode, node))
                         .orElse(lambdaNode);
@@ -104,10 +104,10 @@ class LexicalScope {
     }
 
     protected static class FunFindResult extends FindResult {
-        private final Closure closure;
+        private final Closure.Instantiation closure;
         private final FindResult lambda;
 
-        FunFindResult(LexicalScope source, String name, Closure closure, FindResult lambda) {
+        FunFindResult(LexicalScope source, String name, Closure.Instantiation closure, FindResult lambda) {
             super(source, name);
             this.closure = closure;
             this.lambda = lambda;
@@ -119,15 +119,15 @@ class LexicalScope {
         }
 
         @Override
-        FindResult propagate(Closure through) {
+        void propagate(LexicalFuncScope through, boolean isBinding) {
             System.err.format("Propagate fun '%s'\n", name);
-            var l = lambda.propagate(through);
-            return new FunFindResult(source, name, through.propagate(closure), l);
+            lambda.propagate(through, isBinding);
+            closure.propagate(through);
         }
     }
 
     protected static class RefFindResult extends FindResult {
-        private final ExprGen result;
+        private ExprGen result;
 
         RefFindResult(LexicalScope source, String name, ExprGen result) {
             super(source, name);
@@ -140,13 +140,16 @@ class LexicalScope {
         }
 
         @Override
-        FindResult propagate(Closure through) {
+        void propagate(LexicalFuncScope through, boolean isBinding) {
             System.err.format("Propagate ref '%s'\n", name);
             if (source.isGlobal()) {
                 System.err.println("Nvm, it's global");
-                return this;
+                return;
             }
-            return new RefFindResult(source, name, through.propagate(new Closure.Capture<>(result, source, name)));
+            result = through.closure.propagate(
+                    new Capture<>(result.generate(ValueCategory.Val), source, name),
+                    isBinding
+            );
         }
     }
 
@@ -203,22 +206,25 @@ class LexicalScope {
         return outer.addLocalSlot(name);
     }
 
-    protected Optional<FindResult> findHereRef(LexicalScope maybeFrom, String name) {
+    protected Optional<FindResult> findHereRef(String name) {
         // Try locals
         return Optional.ofNullable(locals.get(name)).map(slot -> new RefFindResult(this, name, getLocal(slot)));
     }
 
-    protected Optional<FindResult> findHere(LexicalScope maybeFrom, String name) {
+    protected Optional<FindResult> findHere(String name) {
         // Try funs
         // TODO: copy-paste
-        // TODO: use maybeFrom to add dependent LexicalScope/Closures edges
         return Optional.ofNullable(funs.get(name)).map(
-                fun -> new FunFindResult(this, name, fun.getLeft(), new RefFindResult(this, name, getLocal(fun.getRight())))
+                fun -> new FunFindResult(
+                        this, name,
+                        fun.getLeft().instantiate(this),
+                        new RefFindResult(this, name, getLocal(fun.getRight()))
+                )
         );
     }
 
     protected Optional<FindResult>
-    findUp(String name, Supplier<Optional<FindResult>> outerFind) {
+    findUp(Supplier<Optional<FindResult>> outerFind, boolean isBinding) {
         // Search up
         if (outer == null) {
             return Optional.empty();
@@ -226,14 +232,18 @@ class LexicalScope {
         return outerFind.get();
     }
 
-    protected Optional<FindResult> findImpl(LexicalScope maybeFrom, String name) {
-        return findHere(maybeFrom, name)
-                .or(() -> findHereRef(maybeFrom, name))
-                .or(() -> findUp(name, () -> outer.findImpl(this, name)));
+    public Optional<FindResult> find(String name) {
+        return findHere(name)
+                .or(() -> findHereRef(name))
+                .or(() -> findUp(() -> outer.find(name), true));
     }
 
-    public Optional<FindResult> find(String name) {
-        return findImpl(null, name);
+    public Optional<FindResult> find(Capture<?> capture) {
+        if (capture.source() == this) {
+            return findHere(capture.name())
+                    .or(() -> findHereRef(capture.name()));
+        }
+        return findUp(() -> outer.find(capture), false);
     }
 
     void addOp(String name, LamaOperators.OpType infixity, Pair<Integer, LamaOperators.OpType> relInfo, int rel) {

@@ -19,6 +19,11 @@ class LexicalFuncScope extends LexicalScope {
     private final String funName;
 
     @Override
+    protected LexicalFuncScope getFuncScope() {
+        return this;
+    }
+
+    @Override
     public boolean isGlobal() {
         return outer == null;
     }
@@ -33,9 +38,9 @@ class LexicalFuncScope extends LexicalScope {
     }
 
     @Override
-    protected Optional<FindResult> findHereRef(LexicalScope maybeFrom, String name) {
+    protected Optional<FindResult> findHereRef(String name) {
         // Try block
-        return super.findHereRef(maybeFrom, name)
+        return super.findHereRef(name)
                 // Try args
                 .or(() -> Optional.ofNullable(args.get(name))
                         .map(index -> new RefFindResult(this, name, getArg(index))))
@@ -45,13 +50,20 @@ class LexicalFuncScope extends LexicalScope {
 
     @Override
     protected Optional<FindResult>
-    findUp(String name, Supplier<Optional<FindResult>> outerFind) {
+    findUp(Supplier<Optional<FindResult>> outerFind, boolean isBinding) {
         // Propagate values through this closure
-        return super.findUp(name, outerFind)
+        return super.findUp(outerFind, isBinding)
                 .map(r -> {
-                    System.err.format("findUp propagate '%s' through function '%s' closure\n", name, funName);
-                    return r.propagate(closure);
+                    System.err.format("findUp propagate something through function '%s' closure\n", funName);
+                    r.propagate(this, isBinding);
+                    return r;
                 });
+    }
+
+    @Override
+    public Optional<FindResult> find(Capture<?> capture) {
+        return closure.find(capture).map(r -> (FindResult) new RefFindResult(r.source(), r.name(), r.value()))
+                .or(() -> super.find(capture));
     }
 
     @Override

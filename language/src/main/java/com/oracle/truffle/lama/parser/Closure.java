@@ -8,31 +8,71 @@ import com.oracle.truffle.lama.nodes.scope.ReadClosureNodeFactory;
 import com.oracle.truffle.lama.runtime.LamaRef;
 import org.graalvm.collections.Pair;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.oracle.truffle.lama.parser.LexicalScope.refGen;
 
 class Closure {
-    record Capture<T>(T value, LexicalScope source, String name) {
-        @Override
-        public boolean equals(Object other) {
-            if (this == other) {
-                return true;
+    class Instantiation {
+        private final Map<Integer, Capture<LamaNode>> slotsInstantiation;
+        private LexicalFuncScope target;
+
+        Instantiation(LexicalFuncScope target) {
+            this.target = target;
+            this.slotsInstantiation = new HashMap<>(Closure.this.closureSlots);
+            Closure.this.instantiations.add(this);
+        }
+
+        public void propagate(LexicalFuncScope through) {
+            System.err.format("Propagate closure '%s' instantiation '%s' through '%s'\n", Closure.this.toString(), this.toString(), through.toString());
+            target = through;
+            for (var e : slotsInstantiation.entrySet()) {
+                var capture = e.getValue();
+                e.setValue(new Capture<>(
+                        through.closure.propagate(capture, false).generate(ValueCategory.Val),
+                        capture.source(),
+                        capture.name()
+                ));
             }
-            if (!(other instanceof Capture<?> o)) {
-                return false;
+        }
+
+        private void addedClosureSlot(int slot) {
+            System.err.format("Respond in %s of %s to added slot %d\n", this.toString(), Closure.this.toString(), slot);
+            var capture = Closure.this.closureSlots.get(slot);
+            LamaNode value = target.find(capture).map(f -> f.get().generate(ValueCategory.Val)).orElse(null);
+            slotsInstantiation.put(slot, new Capture<>(value, capture.source(), capture.name()));
+        }
+
+        public Closure getParent() {
+            return Closure.this;
+        }
+
+        static Optional<ClosureNode> getNode(FrameDescriptor desc, Map<Integer, Capture<LamaNode>> values) {
+            if (values.isEmpty()) {
+                return Optional.empty();
             }
-            return source == o.source && name.equals(o.name);
+            return Optional.of(new ClosureNode(
+                    desc,
+                    values.entrySet().stream().collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            p -> p.getValue().value()
+                    ))
+            ));
+        }
+
+        Optional<ClosureNode> getNode() {
+            System.err.format("getNode in %s of %s with %d slots\n", this.toString(), Closure.this.toString(), slotsInstantiation.size());
+            done = true;
+            return getNode(closureBuilder.build(), slotsInstantiation);
         }
     }
 
     private final Map<String, Integer> lexicalClosure = new HashMap<>();
     private final Map<Integer, Capture<LamaNode>> closureSlots = new HashMap<>();
     private FrameDescriptor.Builder closureBuilder = FrameDescriptor.newBuilder();
+    private final List<Instantiation> instantiations = new ArrayList<>();
     private boolean done = false;
 
     private int addClosureSlot(LamaNode value, LexicalScope source, String name) {
@@ -41,45 +81,25 @@ class Closure {
         }
         var slot = closureBuilder.addSlot(FrameSlotKind.Illegal, name, null);
         closureSlots.put(slot, new Capture<>(value, source, name));
+        for (var instantiation : List.copyOf(instantiations)) {
+            instantiation.addedClosureSlot(slot);
+        }
         // System.err.format("'%s'(%d): Add closure slot '%d'->'%s' to '%s'\n", this.toString(), closure.size(), slot, name, value.toString());
         return slot;
     }
 
-    ExprGen addClosure(LamaNode value, LexicalScope source, String name) {
-        var slot = addClosureSlot(value, source, name);
-        var prev = lexicalClosure.put(name, slot);
-        if (prev != null) {
-            throw new IllegalArgumentException("Aaaa");
-        }
-        return getClosure(slot);
-    }
-
-    <T> ExprGen getOrAddClosureSlot(Capture<T> capture, Function<T, LamaNode> generate) {
-        System.err.format("getOrAddClosureSlot %s:%s\n", capture.source.toString(), capture.name);
+    <T> int getOrAddClosureSlot(Capture<T> capture, Function<T, LamaNode> generate) {
+        System.err.format("getOrAddClosureSlot %s:%s\n", capture.source().toString(), capture.name());
         int slot = lookup(capture).map(Pair::getLeft).orElseGet(() -> addClosureSlot(
-                generate.apply(capture.value),
-                capture.source,
-                capture.name
+                generate.apply(capture.value()),
+                capture.source(),
+                capture.name()
         ));
-        return getClosure(slot);
-    }
-
-    Optional<ClosureNode> getNode() {
-        done = true;
-        if (closureSlots.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(new ClosureNode(
-                closureBuilder.build(),
-                closureSlots.entrySet().stream().collect(Collectors.toMap(
-                        Map.Entry::getKey,
-                        p -> p.getValue().value
-                ))
-        ));
+        return slot;
     }
 
     private Optional<Pair<Integer, LamaNode>> lookup(String name) {
-        return Optional.ofNullable(lexicalClosure.get(name)).map(x -> Pair.create(x, closureSlots.get(x).value));
+        return Optional.ofNullable(lexicalClosure.get(name)).map(x -> Pair.create(x, closureSlots.get(x).value()));
     }
 
     private Optional<Pair<Integer, Capture<LamaNode>>> lookup(Capture<?> capture) {
@@ -99,11 +119,11 @@ class Closure {
     public void print() {
         System.err.println("slots:");
         for (var x : closureSlots.entrySet()) {
-            System.err.format("%d |-> %s@%s(%s)", x.getKey(), x.getValue().source.toString(), x.getValue().name, x.getValue().value.toString());
+            System.err.format("%d |-> %s@%s(%s)\n", x.getKey(), x.getValue().source().toString(), x.getValue().name(), x.getValue().value().toString());
         }
         System.err.println("names:");
         for (var x : lexicalClosure.entrySet()) {
-            System.err.format("%s |-> %d", x.getKey(), x.getValue());
+            System.err.format("%s |-> %d\n", x.getKey(), x.getValue());
         }
     }
 
@@ -116,10 +136,11 @@ class Closure {
         return lookup(name).map(p -> getClosure(p.getLeft()));
     }
 
-    Closure propagate(Closure fromOuter) {
-        if (fromOuter == this) {
+    Optional<Capture<ExprGen>> find(Capture<?> capture) {
+        return lookup(capture).map(p -> new Capture<>(getClosure(p.getLeft()), capture.source(), capture.name()));
+    }
 
-        }
+    Closure propagate(Closure fromOuter) {
         // System.out.format("Propagate closure '%s'(%d) through '%s'(%d)\n", fromOuter, fromOuter.closure.size(), this.toString(), closure.size());
         // if (this == fromOuter) {
         //     System.out.println("HUHH");
@@ -129,13 +150,27 @@ class Closure {
         for (var e : fromOuter.closureSlots.entrySet()) {
             var innerSlot = e.getKey();
             var capture = e.getValue();
-            var node = getOrAddClosureSlot(capture, Function.identity()).generate(ValueCategory.Val);
-            inner.closureSlots.put(innerSlot, new Capture<>(node, capture.source, capture.name));
+            var node = getClosure(getOrAddClosureSlot(capture, Function.identity())).generate(ValueCategory.Val);
+            inner.closureSlots.put(innerSlot, new Capture<>(node, capture.source(), capture.name()));
         }
         return inner;
     }
 
-    ExprGen propagate(Capture<ExprGen> fromOuter) {
-        return getOrAddClosureSlot(fromOuter, x -> x.generate(ValueCategory.Val));
+    ExprGen propagate(Capture<LamaNode> fromOuter, boolean isBinding) {
+        var slot = getOrAddClosureSlot(fromOuter, x -> x);
+        if (isBinding) {
+            lexicalClosure.put(fromOuter.name(), slot);
+        }
+        return getClosure(slot);
+    }
+
+    Instantiation instantiate(LexicalScope outer) {
+        return new Instantiation(outer.getFuncScope());
+    }
+
+    Optional<ClosureNode> getNode() {
+        System.err.format("getNode in %s with %d slots\n", this.toString(), closureSlots.size());
+        done = true;
+        return Instantiation.getNode(closureBuilder.build(), closureSlots);
     }
 }
