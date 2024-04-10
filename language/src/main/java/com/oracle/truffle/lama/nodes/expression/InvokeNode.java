@@ -29,9 +29,7 @@ public class InvokeNode extends LamaNode {
         CompilerAsserts.compilationConstant(this.argumentNodes.length);
 
         Object[] argumentValues = new Object[this.argumentNodes.length + 1];
-        argumentValues[0] = function.closure() == null
-                ? Truffle.getRuntime().createMaterializedFrame(new Object[0])
-                : function.closure();
+        argumentValues[0] = function.closure();
         for (int i = 0; i < argumentNodes.length; i++) {
             argumentValues[i + 1] = argumentNodes[i].execute(virtualFrame);
         }

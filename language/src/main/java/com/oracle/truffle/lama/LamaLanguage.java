@@ -20,7 +20,6 @@ public class LamaLanguage extends TruffleLanguage<LamaContext> {
     @Override
     protected CallTarget parse(ParsingRequest request) {
         var res = parseLama(this, request.getSource());
-        System.err.println("Done parsing!");
         return res;
     }
 }

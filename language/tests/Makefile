@@ -1,7 +1,8 @@
 DEBUG_FILES=stack-dump-before data-dump-before extra-roots-dump-before heap-dump-before stack-dump-after data-dump-after extra-roots-dump-after heap-dump-after
 TESTS=$(sort $(filter-out test111, $(basename $(wildcard test*.lama))))
 
-LAMAR=../../sl -J-Xss4m
+# LAMAR=../../sl -J-Xss4m
+LAMAR=../../standalone/target/slnative
 
 .PHONY: check $(TESTS)
 

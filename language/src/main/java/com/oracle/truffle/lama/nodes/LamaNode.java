@@ -58,8 +58,8 @@ public abstract class LamaNode extends Node {
         return LamaTypesGen.expectInteger(this.execute(virtualFrame));
     }
 
-    public StringBuilder executeStringBuilder(VirtualFrame virtualFrame) throws UnexpectedResultException {
-        return LamaTypesGen.expectStringBuilder(this.execute(virtualFrame));
+    public char[] executeCharArray(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectCharArray(this.execute(virtualFrame));
     }
 
     public Object[] executeObjectArray(VirtualFrame virtualFrame) throws UnexpectedResultException {

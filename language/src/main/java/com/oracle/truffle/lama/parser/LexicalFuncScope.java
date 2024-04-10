@@ -54,7 +54,7 @@ class LexicalFuncScope extends LexicalScope {
         // Propagate values through this closure
         return super.findUp(outerFind, isBinding)
                 .map(r -> {
-                    System.err.format("findUp propagate something through function '%s' closure\n", funName);
+                    // System.err.format("findUp propagate something through function '%s' closure\n", funName);
                     r.propagate(this, isBinding);
                     return r;
                 });
@@ -68,7 +68,7 @@ class LexicalFuncScope extends LexicalScope {
 
     @Override
     public int addLocalSlot(String name) {
-        System.err.format("Add local slot for '%s' in localBuilder'%s'\n", name, localBuilder.toString());
+        // System.err.format("Add local slot for '%s' in localBuilder'%s'\n", name, localBuilder.toString());
         return localBuilder.addSlot(FrameSlotKind.Illegal, name, null);
     }
 
@@ -77,7 +77,7 @@ class LexicalFuncScope extends LexicalScope {
     }
 
     public <T> T getFun(BiFunction<Closure, FrameDescriptor, T> get) {
-        System.err.format("Finish up localBuilder '%s'\n", localBuilder.toString());
+        // System.err.format("Finish up localBuilder '%s'\n", localBuilder.toString());
         return get.apply(closure, localBuilder.build());
     }
 }

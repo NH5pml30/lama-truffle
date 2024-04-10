@@ -2,6 +2,7 @@ package com.oracle.truffle.lama.nodes.builtins;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.strings.TruffleStringBuilder;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.runtime.LamaSExp;
 
@@ -20,16 +21,14 @@ public class SExpNode extends LamaNode {
         return h;
     }
 
-    public static StringBuilder fromHashCode(int hashCode) {
+    public static char[] fromHashCode(int hashCode) {
         var numChars = (Integer.SIZE - Integer.numberOfLeadingZeros(hashCode) + HASH_BITS_PER_CHAR - 1) / HASH_BITS_PER_CHAR;
-        var builder = new StringBuilder(numChars);
-        builder.setLength(numChars);
+        char[] res = new char[numChars];
         for (int i = numChars - 1; i >= 0 && hashCode != 0; i--, hashCode >>= 6) {
-            builder.setCharAt(i, CHARS.charAt(hashCode & 0x003F));
+            res[i] = CHARS.charAt(hashCode & 0x003F);
         }
-        return builder;
+        return res;
     }
-
 
     public SExpNode(String name, LamaNode[] vals) {
         this.hash = hashCode(name);

@@ -54,7 +54,7 @@ public class LamaOperators {
                     )
             ),
             Pair.create(
-                    OpType.InfixRight,
+                    OpType.InfixLeft,
                     Map.of(
                             "*", MulNodeFactory.getInstance(),
                             "/", DivNodeFactory.getInstance(),

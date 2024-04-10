@@ -8,6 +8,7 @@ import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.lama.LamaContext;
 import com.oracle.truffle.lama.nodes.LamaNode;
+import com.oracle.truffle.lama.nodes.builtins.StringNode;
 import com.oracle.truffle.lama.runtime.LamaRefFactory.*;
 
 public abstract class LamaRef {
@@ -73,10 +74,10 @@ public abstract class LamaRef {
     }
 
     static class StringElementRef extends LamaRef {
-        public final StringBuilder value;
+        public final char[] value;
         public final int index;
 
-        public StringElementRef(StringBuilder value, int index) {
+        public StringElementRef(char[] value, int index) {
             this.value = value;
             this.index = index;
         }
@@ -84,7 +85,7 @@ public abstract class LamaRef {
         @Override
         public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
             int castValue = (int) val;
-            value.setCharAt(index, (char) castValue);
+            value[index] = (char) castValue;
             return castValue;
         }
     }
@@ -118,7 +119,7 @@ public abstract class LamaRef {
     @GenerateNodeFactory
     static abstract class ElementRefNode extends LamaNode {
         @Specialization
-        LamaRef get(StringBuilder value, int index) {
+        LamaRef get(char[] value, int index) {
             return new StringElementRef(value, index);
         }
 

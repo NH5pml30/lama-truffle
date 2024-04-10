@@ -3,7 +3,6 @@ package com.oracle.truffle.lama.nodes.controlflow.match.pattern;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.lama.nodes.LamaNode;
-import com.oracle.truffle.lama.runtime.LamaFunction;
 
 public abstract class PatternStrNode extends PatternNode {
     protected PatternStrNode(LamaNode value) {
@@ -11,7 +10,7 @@ public abstract class PatternStrNode extends PatternNode {
     }
 
     @Specialization
-    public int match(StringBuilder str) {
+    public int match(char[] str) {
         return 1;
     }
 

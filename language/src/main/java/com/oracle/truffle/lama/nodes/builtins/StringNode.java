@@ -1,33 +1,36 @@
 package com.oracle.truffle.lama.nodes.builtins;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.lama.runtime.LamaSExp;
 
 public abstract class StringNode extends BuiltinNode {
-    abstract StringBuilder executeWith(Object x);
+    abstract char[] executeWith(Object x);
 
     @Specialization
-    StringBuilder toString(int x) {
-        return new StringBuilder().append(x);
+    @TruffleBoundary
+    char[] toString(int x) {
+        return Integer.toString(x).toCharArray();
     }
 
     @Specialization
-    StringBuilder toString(StringBuilder x) {
-        var res = new StringBuilder("\"").append(x);
-        int fromIndex = 1;
-        while (true) {
-            int idx = res.indexOf("\"", fromIndex);
-            if (idx == -1) {
-                break;
+    @TruffleBoundary
+    char[] toString(char[] x) {
+        var builder = new StringBuilder("\"");
+        for (var c : x) {
+            if (c == '"') {
+                builder.append("\"\"");
+            } else {
+                builder.append(c);
             }
-            res.replace(idx, idx + 1, "\"\"");
-            fromIndex = idx + 2;
         }
-        return res.append("\"");
+        builder.append('"');
+        return builder.toString().toCharArray();
     }
 
     @Specialization
-    StringBuilder toString(Object[] x) {
+    @TruffleBoundary
+    char[] toString(Object[] x) {
         var builder = new StringBuilder();
         builder.append('[');
         for (int i = 0; i < x.length; i++) {
@@ -37,12 +40,14 @@ public abstract class StringNode extends BuiltinNode {
             }
         }
         builder.append(']');
-        return builder;
+        return builder.toString().toCharArray();
     }
 
     @Specialization
-    StringBuilder toString(LamaSExp x) {
-        var builder = new StringBuilder(SExpNode.fromHashCode(x.hash()));
+    @TruffleBoundary
+    char[] toString(LamaSExp x) {
+        var builder = new StringBuilder();
+        builder.append(SExpNode.fromHashCode(x.hash()));
         var children = x.children();
         if (children.length > 0) {
             builder.append(" (");
@@ -54,6 +59,6 @@ public abstract class StringNode extends BuiltinNode {
             }
             builder.append(')');
         }
-        return builder;
+        return builder.toString().toCharArray();
     }
 }

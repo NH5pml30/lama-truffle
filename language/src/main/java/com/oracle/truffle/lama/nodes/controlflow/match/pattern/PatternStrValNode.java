@@ -4,16 +4,18 @@ import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
+import java.util.Arrays;
+
 public abstract class PatternStrValNode extends PatternNode {
-    String val;
+    char[] val;
     protected PatternStrValNode(LamaNode value, String val) {
         super(value);
-        this.val = val;
+        this.val = val.toCharArray();
     }
 
     @Specialization
-    public int match(StringBuilder val) {
-        if (CharSequence.compare(this.val, val) == 0) {
+    public int match(char[] val) {
+        if (Arrays.compare(this.val, val) == 0) {
             return 1;
         }
         return 0;

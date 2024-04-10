@@ -55,11 +55,10 @@ import com.oracle.truffle.lama.nodes.controlflow.match.*;
 import com.oracle.truffle.lama.nodes.controlflow.match.pattern.*;
 import com.oracle.truffle.lama.nodes.scope.*;
 import com.oracle.truffle.lama.nodes.expression.*;
-import com.oracle.truffle.lama.runtime.LamaRef;
+import com.oracle.truffle.lama.runtime.*;
 import org.antlr.v4.runtime.Token;
 
 import com.oracle.truffle.api.source.Source;
-import org.antlr.v4.runtime.TokenFactory;
 import org.graalvm.collections.Pair;
 
 import static com.oracle.truffle.lama.parser.LamaOperators.BUILTIN_OPERATOR_INFO;
@@ -206,7 +205,7 @@ public class LamaNodeFactory {
     }
 
     private boolean addLocal(String name, GenInterface<Void, GenInterface<Void, LamaNode>> value) {
-        System.err.format("Add local '%s'\n", name);
+        // System.err.format("Add local '%s'\n", name);
         return lexicalScope.addLocalValue(name, value);
     }
 
@@ -279,7 +278,7 @@ public class LamaNodeFactory {
                 );
             }
 
-            System.err.format("finish function with '%d' local slots\n", desc.getNumberOfSlots());
+            // System.err.format("finish function with '%d' local slots\n", desc.getNumberOfSlots());
 
             // System.out.format("finish function with '%s'(%d)\n", scope.closure.toString(), scope.closure.closure.size());
             var bodyGen = GenInterface.konst(GenInterface.map(
@@ -288,7 +287,7 @@ public class LamaNodeFactory {
                         if (node == null) {
                             System.err.println("Creating function with null node!!!\n");
                         }
-                        System.err.format("Creating root node with node '%s'\n", node.toString());
+                        // System.err.format("Creating root node with node '%s'\n", node.toString());
                         return (LamaNode) LambdaNodeFactory.create(
                                 new LamaRootNode(language, desc, node).getCallTarget()
                         );
@@ -348,7 +347,7 @@ public class LamaNodeFactory {
     GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createStringLiteral(Token strLiteral) {
         String lit = fromStringLiteral(strLiteral.getText());
         return a ->
-                assertValue(a, GenInterface.lift(new StringLiteralNode(lit)), strLiteral);
+                assertValue(a, GenInterface.lift(StringLiteralNodeFactory.create(lit)), strLiteral);
     }
 
     GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createCharLiteral(Token charLiteral) {
@@ -430,16 +429,6 @@ public class LamaNodeFactory {
                 )
         );
     }
-
-    // TODO: main idea:
-    //   - each closure contains a list of its "instantiations" for each user scope
-    //   - instantiations contain a reference to the closure, its user scope and map of slot |-> value
-    //   - every time a value is added to the closure (at the name resolving stage == GenInterface<ValueCategory, ...>),
-    //     we add it to all the children, which request it from the user scope by its Capture (unique)
-    //     (need to eagerly add a value to not loop)
-    //   - every time we resolve a name to a function, we instantiate the closure and propagate it down
-    //     (we won't loop because all values are already present (?))
-    //   - closure instantiations can be turned into a LamaNodes at the last stage of GenInterface<Void, LamaNode>
 
     private LamaNode createCallNode(LamaNode func, LamaNode[] args) {
         return new InvokeNode(func, args);

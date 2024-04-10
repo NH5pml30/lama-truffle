@@ -40,21 +40,23 @@
  */
 package com.oracle.truffle.lama.nodes.expression;
 
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.NodeInfo;
-import com.oracle.truffle.api.nodes.UnexpectedResultException;
-import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
-public final class StringLiteralNode extends LamaNode {
-    private final String value;
+import java.util.Arrays;
+
+
+@GenerateNodeFactory
+public abstract class StringLiteralNode extends LamaNode {
+    private final char[] value;
 
     public StringLiteralNode(String value) {
-        this.value = value;
+        this.value = value.toCharArray();
     }
 
-    @Override
-    public Object execute(VirtualFrame frame) {
-        return new StringBuilder(value);
+    @Specialization
+    public char[] execute() {
+        return Arrays.copyOf(value, value.length);
     }
 }

@@ -274,8 +274,6 @@ primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resul
     s=STRING { $result = factory.createStringLiteral($s); } |
     c=CHAR { $result = factory.createCharLiteral($c); } |
     i=LIDENT { $result = factory.createRead($i); } |
-    'true' |
-    'false' |
     'infix' OP { $result = factory.createInfix($OP); }
     |
     t='fun'
@@ -300,7 +298,7 @@ primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resul
 ifExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
     { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> falsePart; }
     t='if' expression
-    'then' scopeExpression // TODO: check if it should be a parser error if the block is empty, but assignment happens
+    'then' scopeExpression
     { falsePart = factory.createSkip($t); }
     (
         elsePart { falsePart = $elsePart.result; }

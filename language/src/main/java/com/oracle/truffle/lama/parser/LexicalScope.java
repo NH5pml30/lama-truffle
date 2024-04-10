@@ -1,8 +1,8 @@
 package com.oracle.truffle.lama.parser;
 
 import com.oracle.truffle.lama.nodes.LamaNode;
-import com.oracle.truffle.lama.nodes.builtins.AssignNodeFactory;
-import com.oracle.truffle.lama.nodes.expression.SetClosureNodeFactory;
+import com.oracle.truffle.lama.nodes.builtins.*;
+import com.oracle.truffle.lama.nodes.expression.*;
 import com.oracle.truffle.lama.nodes.scope.ReadGlobalNodeFactory;
 import com.oracle.truffle.lama.nodes.scope.ReadLocalNodeFactory;
 import com.oracle.truffle.lama.runtime.LamaRef;
@@ -94,8 +94,8 @@ class LexicalScope {
         ExprGen instantiate() {
             return a -> {
                 var lambdaNode = lambda.generate(ValueCategory.Val);
-                System.err.format("instantiate closure '%s' + lambda node '%s'\nClosure:\n", closure.getParent().toString(), lambdaNode.toString());
-                closure.getParent().print();
+                // System.err.format("instantiate closure '%s' + lambda node '%s'\nClosure:\n", closure.getParent().toString(), lambdaNode.toString());
+                // closure.getParent().print();
                 return closure.getNode()
                         .map(node -> (LamaNode) SetClosureNodeFactory.create(lambdaNode, node))
                         .orElse(lambdaNode);
@@ -120,7 +120,7 @@ class LexicalScope {
 
         @Override
         void propagate(LexicalFuncScope through, boolean isBinding) {
-            System.err.format("Propagate fun '%s'\n", name);
+            // System.err.format("Propagate fun '%s'\n", name);
             lambda.propagate(through, isBinding);
             closure.propagate(through);
         }
@@ -141,9 +141,9 @@ class LexicalScope {
 
         @Override
         void propagate(LexicalFuncScope through, boolean isBinding) {
-            System.err.format("Propagate ref '%s'\n", name);
+            // System.err.format("Propagate ref '%s'\n", name);
             if (source.isGlobal()) {
-                System.err.println("Nvm, it's global");
+                // System.err.println("Nvm, it's global");
                 return;
             }
             result = through.closure.propagate(

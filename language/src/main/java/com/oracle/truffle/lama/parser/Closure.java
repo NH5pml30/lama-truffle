@@ -26,7 +26,7 @@ class Closure {
         }
 
         public void propagate(LexicalFuncScope through) {
-            System.err.format("Propagate closure '%s' instantiation '%s' through '%s'\n", Closure.this.toString(), this.toString(), through.toString());
+            // System.err.format("Propagate closure '%s' instantiation '%s' through '%s'\n", Closure.this.toString(), this.toString(), through.toString());
             target = through;
             for (var e : slotsInstantiation.entrySet()) {
                 var capture = e.getValue();
@@ -39,7 +39,7 @@ class Closure {
         }
 
         private void addedClosureSlot(int slot) {
-            System.err.format("Respond in %s of %s to added slot %d\n", this.toString(), Closure.this.toString(), slot);
+            // System.err.format("Respond in %s of %s to added slot %d\n", this.toString(), Closure.this.toString(), slot);
             var capture = Closure.this.closureSlots.get(slot);
             LamaNode value = target.find(capture).map(f -> f.get().generate(ValueCategory.Val)).orElse(null);
             slotsInstantiation.put(slot, new Capture<>(value, capture.source(), capture.name()));
@@ -63,7 +63,7 @@ class Closure {
         }
 
         Optional<ClosureNode> getNode() {
-            System.err.format("getNode in %s of %s with %d slots\n", this.toString(), Closure.this.toString(), slotsInstantiation.size());
+            // System.err.format("getNode in %s of %s with %d slots\n", this.toString(), Closure.this.toString(), slotsInstantiation.size());
             done = true;
             return getNode(closureBuilder.build(), slotsInstantiation);
         }
@@ -89,7 +89,7 @@ class Closure {
     }
 
     <T> int getOrAddClosureSlot(Capture<T> capture, Function<T, LamaNode> generate) {
-        System.err.format("getOrAddClosureSlot %s:%s\n", capture.source().toString(), capture.name());
+        // System.err.format("getOrAddClosureSlot %s:%s\n", capture.source().toString(), capture.name());
         int slot = lookup(capture).map(Pair::getLeft).orElseGet(() -> addClosureSlot(
                 generate.apply(capture.value()),
                 capture.source(),
@@ -128,7 +128,7 @@ class Closure {
     }
 
     ExprGen getClosure(int slot) {
-        System.err.format("%s: getClosure@%d -> %s\n", this.toString(), slot, slot2name(slot));
+        // System.err.format("%s: getClosure@%d -> %s\n", this.toString(), slot, slot2name(slot));
         return refGen(ReadClosureNodeFactory.create(slot), LamaRef.closure(slot));
     }
 
@@ -140,7 +140,7 @@ class Closure {
         return lookup(capture).map(p -> new Capture<>(getClosure(p.getLeft()), capture.source(), capture.name()));
     }
 
-    Closure propagate(Closure fromOuter) {
+    /*Closure propagate(Closure fromOuter) {
         // System.out.format("Propagate closure '%s'(%d) through '%s'(%d)\n", fromOuter, fromOuter.closure.size(), this.toString(), closure.size());
         // if (this == fromOuter) {
         //     System.out.println("HUHH");
@@ -154,7 +154,7 @@ class Closure {
             inner.closureSlots.put(innerSlot, new Capture<>(node, capture.source(), capture.name()));
         }
         return inner;
-    }
+    }*/
 
     ExprGen propagate(Capture<LamaNode> fromOuter, boolean isBinding) {
         var slot = getOrAddClosureSlot(fromOuter, x -> x);
@@ -169,7 +169,7 @@ class Closure {
     }
 
     Optional<ClosureNode> getNode() {
-        System.err.format("getNode in %s with %d slots\n", this.toString(), closureSlots.size());
+        // System.err.format("getNode in %s with %d slots\n", this.toString(), closureSlots.size());
         done = true;
         return Instantiation.getNode(closureBuilder.build(), closureSlots);
     }
