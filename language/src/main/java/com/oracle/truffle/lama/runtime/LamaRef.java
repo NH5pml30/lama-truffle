@@ -14,7 +14,6 @@ import com.oracle.truffle.lama.runtime.LamaRefFactory.*;
 public abstract class LamaRef {
     public abstract Object assign(LamaContext ctx, VirtualFrame frame, Object val);
 
-    // TODO: unify logic with reading
     static class GlobalRef extends LamaRef {
         public final int slot;
 
@@ -24,7 +23,6 @@ public abstract class LamaRef {
 
         @Override
         public Object assign(LamaContext ctx, VirtualFrame frame, Object val) {
-            // System.err.format("Set global '%d' to '%s'\n", slot, val.toString());
             ctx.getGlobalScope().setObject(slot, val);
             return val;
         }

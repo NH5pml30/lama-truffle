@@ -61,9 +61,14 @@ import org.antlr.v4.runtime.Token;
 import com.oracle.truffle.api.source.Source;
 import org.graalvm.collections.Pair;
 
-import static com.oracle.truffle.lama.parser.LamaOperators.BUILTIN_OPERATOR_INFO;
-import static com.oracle.truffle.lama.parser.LamaOperators.getOperatorInfo;
+import static com.oracle.truffle.lama.parser.LamaOperators.*;
 
+// Parser helper class.
+// Use two passes of source analysis:
+// First, parse source to something and create all local scopes with local variable names.
+// Then, resolve names everywhere (first `GenInterface::generate` call), and build up closures.
+// Because of self-referencing between functions, we need to resolve all names everywhere before finally creating closure nodes.
+// Then, finalize the closures (second `GenInterface::generate` call) and construct the necessary LamaNode structure.
 public class LamaNodeFactory {
     private final LamaLanguage language;
     private final Source source;
@@ -96,6 +101,7 @@ public class LamaNodeFactory {
                     ).entrySet().stream()
             ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
+    // Use ValueCategory to track where we need to generate LamaRef constructions for assignment
     <T> T assertValue(ValueCategory a, T ret, Token t) {
         if (a == ValueCategory.Ref) {
             throw newSemErr(t, "reference expected");
@@ -103,27 +109,26 @@ public class LamaNodeFactory {
         return ret;
     }
 
+    // Operator support functions
     Pair<Integer, LamaOperators.OpType> getOpInfo(LexicalScope scope, Token t) {
-        // System.err.format("Search for '%s' operator\n", t.getText());
-        // System.err.println(scope);
-        // getOperatorInfo(scope).print();
         return getOperatorInfo(scope).get(t.getText()).orElseThrow(() -> newSemErr(t, "Unrecognized operator"));
     }
 
     int getPrecedence(Token t) {
-        var res = getOpInfo(lexicalScope, t).getLeft();
-        // System.err.format("Got precedence: %d\n", res);
-        return res;
+        return getOpInfo(lexicalScope, t).getLeft();
+    }
+
+    int getRightPrecedence(Token t) {
+        var info = getOpInfo(lexicalScope, t);
+        return info.getLeft() + (info.getRight() == LamaOperators.OpType.InfixRight ? 0 : 1);
     }
 
     int getNextPrecedence(Token t) {
         var info = getOpInfo(lexicalScope, t);
-        var res = info.getLeft() + (info.getRight() == LamaOperators.OpType.InfixRight ? 0 : 1);
-        // System.err.format("Got next precedence: %d\n", res);
-        return res;
+        return info.getLeft() + (info.getRight() == LamaOperators.OpType.InfixLeft ? 0 : -1);
     }
 
-    // State while parsing a source unit
+    // Current lexical scope
     private LexicalScope lexicalScope = null;
 
     LamaNodeFactory(LamaLanguage language, Source source) {
@@ -162,10 +167,7 @@ public class LamaNodeFactory {
         });
     }
 
-    GenInterface<
-            GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>>,
-            GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>>
-            > startFunctionPat(List<PatGen> argumentsPats, String funName, Token t) {
+    GenInterface<ScopedExprsGen, ScopedExprsGen> startFunctionPat(List<PatGen> argumentsPats, String funName, Token t) {
         List<String> arguments = new ArrayList<>();
         pushScope(outerScope -> {
             var scope = new LexicalFuncScope(outerScope, funName);
@@ -177,43 +179,41 @@ public class LamaNodeFactory {
             }
             return scope;
         });
-        GenInterface<
-                GenInterface<ValueCategory, GenInterface<Void, LamaNode>>,
-                GenInterface<ValueCategory, GenInterface<Void, LamaNode>>
-                > r = x -> x;
+        GenInterface<ScopedExprGen, ScopedExprGen> r = x -> x;
         for (int i = 0; i < argumentsPats.size(); i++) {
             var pat = argumentsPats.get(i);
             var name = arguments.get(i);
-            r = x -> createPatternMatch(createRead(name, t), List.of(Pair.create(pat, x)));
+            r = x -> createPatternMatch(createSymbol(name, t), List.of(Pair.create(pat, x)));
         }
-        return GenInterface.map(GenInterface.compose(r, this::finishSeq), GenInterfaces::of);
+        return GenInterface.compose(GenInterface.map(r, x -> GenInterfaces.of(x)::generate), this::finishSeq);
     }
 
     void startMain() {
         startFunction(List.of(), "main");
         for (var b : BUILTINS.entrySet()) {
-            addLocal(b.getKey(), GenInterface.lift(GenInterface.lift(LambdaNodeFactory.create(
+            addLocal(b.getKey(), v -> GenInterface.lift(LambdaNodeFactory.create(
                     BuiltinNode.createBuiltinFunction(
                             language, b.getValue(), null
-                    )
-            ))));
+                    ),
+                    b.getKey()
+            )));
         }
     }
 
     void addFun(String name, Fun fun) {
+        // Currently, this adds a local (or global) variable
         lexicalScope.addFun(name, fun.closure, fun.body);
     }
 
-    private boolean addLocal(String name, GenInterface<Void, GenInterface<Void, LamaNode>> value) {
-        // System.err.format("Add local '%s'\n", name);
+    private boolean addLocal(String name, ScopedValGen value) {
         return lexicalScope.addLocalValue(name, value);
     }
 
-    boolean tryAddLocal(Token name, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> value) {
-        return addLocal(name.getText(), GenInterface.konst(value, ValueCategory.Val));
+    boolean tryAddLocal(Token name, ScopedExprGen value) {
+        return addLocal(name.getText(), GenInterface.konst(value, ValueCategory.Val)::generate);
     }
 
-    void addLocal(Token name, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> value) {
+    void addLocal(Token name, ScopedExprGen value) {
         if (!tryAddLocal(name, value)) {
             throw newSemErr(name, "Local with this name already defined");
         }
@@ -227,32 +227,21 @@ public class LamaNodeFactory {
         lexicalScope.addOp(name.getText(), infixity, getOpInfo(lexicalScope, relOp), rel);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> finishSeq(GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body) {
-        return a -> {
-            // First, bind names
-            var nameResolved = body.generate(a);
-
-            return v -> {
-                // Second, generate nodes
-                var bodyNodes = nameResolved.stream().map(x -> x.generate(null)).toArray(LamaNode[]::new);
-                if (containsNull(Arrays.stream(bodyNodes))) {
-                    System.err.println("Seq contains null!!!\n");
-                    return null;
-                }
-
-                return new BlockNode(bodyNodes);
-            };
-        };
+    ScopedExprGen finishSeq(ScopedExprsGen body) {
+        return GenInterface.map(body, l -> GenInterface.map(
+                GenInterfaces.sequence(l),
+                n -> (LamaNode) new BlockNode(n.toArray(LamaNode[]::new))
+        ))::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> finishBlock(GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body) {
+    ScopedExprGen finishBlock(ScopedExprsGen body) {
         var scope = popScope();
 
-        return finishSeq(scope.getBlock(inits -> GenInterfaces.concat(inits, body)));
+        return finishSeq(scope.getBlock(inits -> GenInterfaces.concat(inits, body)::generate));
     }
 
-    record Fun(Closure closure, GenInterface<Void, GenInterface<Void, LamaNode>> body) {
-        GenInterface<Void, GenInterface<Void, LamaNode>> instantiate() {
+    record Fun(Closure closure, ScopedValGen body) {
+        ScopedValGen instantiate() {
             return GenInterface.map(
                     body,
                     b -> GenInterface.map(b,
@@ -260,54 +249,46 @@ public class LamaNodeFactory {
                                     .map(node -> (LamaNode) SetClosureNodeFactory.create(bodyNode, node))
                                     .orElse(bodyNode)
                     )
-            );
+            )::generate;
         }
     }
 
     // Asserts that this is a function scope
-    Fun finishFunction(GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body) {
+    Fun finishFunction(ScopedExprsGen body) {
         var scope = (LexicalFuncScope) popScope();
 
         // capture scope
         return scope.getBlock(inits -> scope.getFun((closure, desc) -> {
-            var initBody = GenInterfaces.concat(inits, body);
+            ScopedExprsGen initBody = GenInterfaces.concat(inits, body)::generate;
             if (scope.isGlobal()) {
                 initBody = GenInterfaces.concat(
                         GenInterfaces.of(GenInterface.lift(GenInterface.lift(SetGlobalScopeNodeFactory.create(desc)))),
                         initBody
-                );
+                )::generate;
             }
 
-            // System.err.format("finish function with '%d' local slots\n", desc.getNumberOfSlots());
-
-            // System.out.format("finish function with '%s'(%d)\n", scope.closure.toString(), scope.closure.closure.size());
             var bodyGen = GenInterface.konst(GenInterface.map(
                     finishSeq(initBody),
-                    i -> GenInterface.map(i, node -> {
-                        if (node == null) {
-                            System.err.println("Creating function with null node!!!\n");
-                        }
-                        // System.err.format("Creating root node with node '%s'\n", node.toString());
-                        return (LamaNode) LambdaNodeFactory.create(
-                                new LamaRootNode(language, desc, node).getCallTarget()
-                        );
-                    })
+                    i -> GenInterface.map(i, node -> (LamaNode) LambdaNodeFactory.create(
+                            new LamaRootNode(language, desc, node).getCallTarget(),
+                            scope.funName
+                    ))
             ), ValueCategory.Val);
-            return new Fun(closure, bodyGen);
+            return new Fun(closure, bodyGen::generate);
         }));
     }
 
     // Asserts that this is a function scope
-    RootCallTarget finishMain(GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body, Token t) {
+    RootCallTarget finishMain(ScopedExprsGen body, Token t) {
         var main = finishFunction(body);
         var mainNode = finishSeq(
                 GenInterfaces.of(
                         GenInterface.konst(createCall(
-                                genValue(main.instantiate(), t),
+                                genValue(main.instantiate(), t)::generate,
                                 List.of(), t
                         ), ValueCategory.Val),
-                        GenInterface.lift(GenInterface.lift(new IntLiteralNode(0)))
-                )
+                        GenInterface.lift(GenInterface.lift(IntLiteralNodeFactory.create(0)))
+                )::generate
         ).generate(ValueCategory.Val).generate(null);
         if (mainNode == null) {
             return null;
@@ -320,51 +301,55 @@ public class LamaNodeFactory {
         return GenInterface.compose(r, a -> assertValue(a, null, t));
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createSkip(Token t) {
+    ScopedExprGen createSkip(Token t) {
         return a -> assertValue(a, null, t);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createIntLiteral(Token intLiteral) {
+    ScopedExprGen createIntLiteral(Token intLiteral) {
         return a -> assertValue(
                 a,
-                GenInterface.lift(new IntLiteralNode(Integer.parseInt(intLiteral.getText()))),
+                GenInterface.lift(IntLiteralNodeFactory.create(Integer.parseInt(intLiteral.getText()))),
                 intLiteral
         );
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createIntLiteral(Token opLiteral, Token intLiteral) {
+    ScopedExprGen createIntLiteral(Token opLiteral, Token intLiteral) {
         return a -> assertValue(
                 a,
-                GenInterface.lift(new IntLiteralNode(Integer.parseInt(opLiteral.getText() + intLiteral.getText()))),
+                GenInterface.lift(IntLiteralNodeFactory.create(Integer.parseInt(opLiteral.getText() + intLiteral.getText()))),
                 opLiteral
         );
+    }
+
+    ScopedExprGen createFalse(Token t) {
+        return a -> assertValue(a, GenInterface.lift(IntLiteralNodeFactory.create(0)), t);
+    }
+
+    ScopedExprGen createTrue(Token t) {
+        return a -> assertValue(a, GenInterface.lift(IntLiteralNodeFactory.create(1)), t);
     }
 
     private static String fromStringLiteral(String quotedLit) {
         return quotedLit.substring(1, quotedLit.length() - 1).replace("\"\"", "\"");
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createStringLiteral(Token strLiteral) {
+    ScopedExprGen createStringLiteral(Token strLiteral) {
         String lit = fromStringLiteral(strLiteral.getText());
         return a ->
                 assertValue(a, GenInterface.lift(StringLiteralNodeFactory.create(lit)), strLiteral);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createCharLiteral(Token charLiteral) {
+    ScopedExprGen createCharLiteral(Token charLiteral) {
         String quotedLit = charLiteral.getText();
         String lit = quotedLit.substring(1, quotedLit.length() - 1);
-        return a -> assertValue(a, GenInterface.lift(new IntLiteralNode(lit.charAt(0))), charLiteral);
+        return a -> assertValue(a, GenInterface.lift(IntLiteralNodeFactory.create(lit.charAt(0))), charLiteral);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createBinary(
-            Token opToken,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> left,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> right
-    ) {
+    ScopedExprGen createBinary(Token opToken, ScopedExprGen left, ScopedExprGen right) {
         var scope = lexicalScope;
         var lhsCat = LamaOperators.op2cat(opToken.getText());
         // capture scope
-        return GenInterface.compose(
+        return genValue(
                 GenInterface.lift3(
                         v -> scope.find(opToken.getText())
                                 .orElseThrow(() -> newSemErr(opToken, "operator not in scope"))
@@ -372,182 +357,162 @@ public class LamaNodeFactory {
                         GenInterface.konst(left, lhsCat),
                         GenInterface.konst(right, ValueCategory.Val),
                         (op, l, r) ->
-                                GenInterface.lift2(l, r, (ln, rn) -> {
-                                    if (ln == null || rn == null) {
-                                        return null;
-                                    }
-                                    // System.err.format("Create binary '%s'\n", opToken.getText());
-                                    return lhsCat == ValueCategory.Ref
-                                            ? BUILTIN_OPERATOR_INFO.stream().map(Pair::getRight)
+                                GenInterface.lift2(l, r, (ln, rn) -> lhsCat == ValueCategory.Ref
+                                        ? BUILTIN_OPERATOR_INFO.stream().map(Pair::getRight)
                                             .flatMap(m -> Optional.ofNullable(m.get(opToken.getText())).stream())
                                             .findFirst().orElseThrow(() -> newSemErr(opToken, "operator not in scope"))
                                             .createNode((Object) new LamaNode[]{ln, rn})
-                                            : createCallNode(op, new LamaNode[]{ln, rn});
-                                })),
-                a -> assertValue(a, null, opToken)
-        );
+                                        : createCallNode(op, new LamaNode[]{ln, rn}))),
+                opToken
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createInfix(Token opToken) {
-        return createRead(opToken);
+    ScopedExprGen createUnary(Token opToken, ScopedExprGen expr) {
+        return genValue(
+                GenInterface.map(
+                        GenInterface.konst(expr, ValueCategory.Val),
+                        e -> GenInterface.map(e, en ->
+                                (LamaNode) Optional.ofNullable(BUILTIN_UNARY_OPERATOR_INFO.get(opToken.getText()))
+                                        .orElseThrow(() -> newSemErr(opToken, "operator not in scope"))
+                                        .createNode((Object) new LamaNode[]{en}))),
+                opToken
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createRead(String name, Token t) {
+    ScopedExprGen createInfix(Token opToken) {
+        return createSymbol(opToken);
+    }
+
+    ScopedExprGen createSymbol(String name, Token t) {
         var scope = lexicalScope;
 
         // capture scope
         return a -> {
             var lookup = scope.find(name).orElseThrow(() -> newSemErr(t, "variable not in scope"))
                     .get();
-            // System.err.format("Found for '%s': %s\n", name.getText(), Objects.toString(lookup));
             return GenInterface.konst(lookup, a);
         };
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createRead(Token name) {
-        return createRead(name.getText(), name);
+    ScopedExprGen createSymbol(Token name) {
+        return createSymbol(name.getText(), name);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createElement(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> arr,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> index
-    ) {
+    ScopedExprGen createElement(ScopedExprGen arr, ScopedExprGen index) {
         return GenInterface.lift3(
-                a -> a,
+                (ValueCategory a) -> a,
                 GenInterface.forget(GenInterface.konst(arr, ValueCategory.Val)),
                 GenInterface.forget(GenInterface.konst(index, ValueCategory.Val)),
                 (a, ar, in) -> GenInterface.lift2(ar, in,
-                        (arn, inn) -> {
-                            if (arn == null || inn == null) {
-                                return null;
-                            }
-                            return switch (a) {
-                                case Val -> ReadElementNodeFactory.create(arn, inn);
-                                case Ref -> LamaRef.element(arn, inn);
-                            };
+                        (arn, inn) -> switch (a) {
+                            case Val -> ReadElementNodeFactory.create(arn, inn);
+                            case Ref -> LamaRef.element(arn, inn);
                         }
                 )
-        );
+        )::generate;
     }
 
     private LamaNode createCallNode(LamaNode func, LamaNode[] args) {
         return new InvokeNode(func, args);
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createCall(GenInterface<ValueCategory, GenInterface<Void, LamaNode>> function, List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> parameters, Token t) {
+    ScopedExprGen createCall(ScopedExprGen function, List<ScopedExprGen> parameters, Token t) {
         var functionGen = GenInterface.konst(function, ValueCategory.Val);
-        var parametersGen = GenInterface.konst(GenInterface.map(GenInterfaces.sequence(parameters), GenInterfaces::sequence), ValueCategory.Val);
-        return GenInterface.compose(
-                GenInterface.lift2(functionGen, parametersGen, (fn, pn) ->
-                        GenInterface.lift2(fn, pn, (functionNode, parameterNodes) -> {
-                            if (functionNode == null || containsNull(parameterNodes.stream())) {
-                                return null;
-                            }
-                            return createCallNode(functionNode, parameterNodes.toArray(LamaNode[]::new));
-                        })),
-                a -> assertValue(a, null, t)
+        var parametersGen = GenInterface.konst(
+                GenInterface.map(GenInterfaces.sequence(parameters), GenInterfaces::sequence),
+                ValueCategory.Val
         );
+        return genValue(
+                GenInterface.lift2(functionGen, parametersGen, (fn, pn) ->
+                        GenInterface.lift2(fn, pn, (functionNode, parameterNodes) ->
+                                createCallNode(functionNode, parameterNodes.toArray(LamaNode[]::new)))),
+                t
+        )::generate;
     }
 
-    // elsePart is optional
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createIfThenElse(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> condition,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> then,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> elsePart
+    // elsePart is optional (can be `skip`)
+    ScopedExprGen createIfThenElse(
+            ScopedExprGen condition,
+            ScopedExprGen then,
+            ScopedExprGen elsePart
     ) {
         return GenInterface.lift3(
                 GenInterface.forget(GenInterface.konst(condition, ValueCategory.Val)),
                 then, elsePart,
-                (c, t, e) -> GenInterface.lift3(c, t, e == null ? v -> null : e, IfNodeFactory::create)
-        );
+                (c, t, e) -> GenInterface.lift3(c, t, e == null ? v -> null : e,
+                        (cn, tn, en) -> (LamaNode) IfNodeFactory.create(cn, tn, en))
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createWhileDo(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> condition,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> body,
+    ScopedExprGen createWhileDo(
+            ScopedExprGen condition,
+            ScopedExprGen body,
             Token t
     ) {
-        return GenInterface.compose(
+        return genValue(
                 GenInterface.lift2(
-                        GenInterface.forget(GenInterface.konst(condition, ValueCategory.Val)),
-                        body,
+                        GenInterface.konst(condition, ValueCategory.Val),
+                        GenInterface.konst(body, ValueCategory.Val),
                         (cn, bn) ->
-                        GenInterface.lift2(cn, bn, (conditionNode, bodyNode) -> {
-                            if (conditionNode == null || bodyNode == null) {
-                                return null;
-                            }
-                            return new WhileDoNode(conditionNode, bodyNode);
-                        })),
-                a -> assertValue(a, null, t)
-        );
+                        GenInterface.lift2(cn, bn, (conditionNode, bodyNode) ->
+                                (LamaNode) new WhileDoNode(conditionNode, bodyNode))),
+                t
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createDoWhile(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> body,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> condition,
+    ScopedExprGen createDoWhile(
+            ScopedExprGen body,
+            ScopedExprGen condition,
             Token t
     ) {
-        return GenInterface.compose(
+        return genValue(
                 GenInterface.lift2(
-                        body,
-                        GenInterface.forget(GenInterface.konst(condition, ValueCategory.Val)),
+                        GenInterface.konst(body, ValueCategory.Val),
+                        GenInterface.konst(condition, ValueCategory.Val),
                         (bn, cn) ->
-                                GenInterface.lift2(bn, cn, (bodyNode, conditionNode) -> {
-                                    if (conditionNode == null || bodyNode == null) {
-                                        return null;
-                                    }
-                                    return new DoWhileNode(bodyNode, conditionNode);
-                                })),
-                a -> assertValue(a, null, t)
-        );
+                                GenInterface.lift2(bn, cn, (bodyNode, conditionNode) ->
+                                        (LamaNode) new DoWhileNode(bodyNode, conditionNode))),
+                t
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createForLoop(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> init,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> condition,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> step,
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> body,
+    ScopedExprGen createForLoop(
+            ScopedExprGen init,
+            ScopedExprGen condition,
+            ScopedExprGen step,
+            ScopedExprGen body,
             Token t
     ) {
-        return GenInterface.compose(
+        return genValue(
                 GenInterface.lift4(
-                        GenInterface.forget(GenInterface.konst(init, ValueCategory.Val)),
-                        GenInterface.forget(GenInterface.konst(condition, ValueCategory.Val)),
-                        GenInterface.forget(GenInterface.konst(step, ValueCategory.Val)),
-                        body,
+                        GenInterface.konst(init, ValueCategory.Val),
+                        GenInterface.konst(condition, ValueCategory.Val),
+                        GenInterface.konst(step, ValueCategory.Val),
+                        GenInterface.konst(body, ValueCategory.Val),
                         (in, cn, sn, bn) ->
-                                GenInterface.lift4(in, cn, sn, bn, (i, c, s, b) -> {
-                                    if (i == null || c == null || s == null || b == null) {
-                                        return null;
-                                    }
-                                    return new ForNode(i, c, s, b);
-                                })),
-                a -> assertValue(a, null, t)
-        );
+                                GenInterface.lift4(in, cn, sn, bn, (i, c, s, b) -> (LamaNode) new ForNode(i, c, s, b))),
+                t
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createArray(
-            GenInterfaces<Void, GenInterface<Void, LamaNode>> vals, Token t
-    ) {
-        return GenInterface.compose(
+    ScopedExprGen createArray(ScopedValsGen vals, Token t) {
+        return genValue(
                 GenInterface.map(vals, l -> GenInterface.map(
                         GenInterfaces.sequence(l),
-                        n -> new ArrayNode(n.toArray(LamaNode[]::new))
+                        n -> (LamaNode) new ArrayNode(n.toArray(LamaNode[]::new))
                 )),
-                a -> assertValue(a, null, t)
-        );
+                t
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createSExp(
-            String name, GenInterfaces<Void, GenInterface<Void, LamaNode>> vals, Token t
-    ) {
-        return GenInterface.compose(
+    ScopedExprGen createSExp(String name, ScopedValsGen vals, Token t) {
+        return genValue(
                 GenInterface.map(vals, l -> GenInterface.map(
                         GenInterfaces.sequence(l),
-                        n -> new SExpNode(name, n.toArray(LamaNode[]::new))
+                        n -> (LamaNode) new SExpNode(name, n.toArray(LamaNode[]::new))
                 )),
-                a -> assertValue(a, null, t)
-        );
+                t
+        )::generate;
     }
 
     private static <T, R> R reduceRight(List<T> list, BiFunction<T, R, R> op, R accum) {
@@ -557,26 +522,21 @@ public class LamaNodeFactory {
         return accum;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createList(
-            GenInterfaces<Void, GenInterface<Void, LamaNode>> vals, Token t
-    ) {
-        return GenInterface.compose(
+    ScopedExprGen createList(ScopedValsGen vals, Token t) {
+        return genValue(
                 GenInterface.map(vals, l -> GenInterface.map(
                         GenInterfaces.sequence(l),
                         n -> reduceRight(
                                 n,
                                 (lhs, rhs) -> ConsNodeFactory.create(new LamaNode[]{lhs, rhs}),
-                                (LamaNode) new IntLiteralNode(0)
+                                (LamaNode) IntLiteralNodeFactory.create(0)
                         )
                 )),
-                a -> assertValue(a, null, t)
-        );
+                t
+        )::generate;
     }
 
-    GenInterface<ValueCategory, GenInterface<Void, LamaNode>> createPatternMatch(
-            GenInterface<ValueCategory, GenInterface<Void, LamaNode>> what,
-            List<Pair<PatGen, GenInterface<ValueCategory, GenInterface<Void, LamaNode>>>> matches
-    ) {
+    ScopedExprGen createPatternMatch(ScopedExprGen what, List<Pair<PatGen, ScopedExprGen>> matches) {
         var matchesGen = GenInterface.map(GenInterfaces.sequence(
                 matches.stream().map(p -> GenInterface.map(
                         p.getRight(),
@@ -588,17 +548,14 @@ public class LamaNodeFactory {
                 matchesGen,
                 (wn, mn) ->
                         GenInterface.lift2(wn, mn, (whatNode, matchesNodes) -> {
-                            if (whatNode == null || containsNull(matchesNodes.stream().map(Pair::getRight))) {
-                                return null;
-                            }
                             PatternMatchBaseNode match = PatternMatchEmptyNodeFactory.create(whatNode);
                             for (var m : matchesNodes) {
                                 // safe to generate PatGen here because they don't influence closures
                                 match = PatternMatchNodeFactory.create(whatNode, match, m.getLeft().apply(whatNode), m.getRight());
                             }
-                            return match;
+                            return (LamaNode) match;
                         })
-        );
+        )::generate;
     }
 
     PatGen createSExpPattern(String name, List<PatGen> pats) {
@@ -656,9 +613,5 @@ public class LamaNodeFactory {
 
     String freshName() {
         return "_" + java.util.UUID.randomUUID().toString().replace("-", "");
-    }
-
-    private static boolean containsNull(Stream<?> stream) {
-        return stream.anyMatch(Objects::isNull);
     }
 }

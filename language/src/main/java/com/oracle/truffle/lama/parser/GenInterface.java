@@ -45,7 +45,7 @@ interface GenInterface<T, R> {
 
     static <T, R1, R2, R3, R4> GenInterface<T, R4> lift3(
             GenInterface<T, R1> r1, GenInterface<T, R2> r2, GenInterface<T, R3> r3,
-            TriFunction<R1, R2, R3, R4> f
+            TriFunction<R1, R2, R3, ? extends R4> f
     ) {
         return t -> f.apply(r1.generate(t), r2.generate(t), r3.generate(t));
     }
@@ -61,15 +61,6 @@ interface GenInterface<T, R> {
         return t -> f.apply(r1.generate(t), r2.generate(t), r3.generate(t), r4.generate(t));
     }
 }
-
-// Determine if expression should produce a reference or a value (different nodes) during parsing
-interface CatGenInterface<T> extends GenInterface<ValueCategory, T> {}
-
-// Generates an expression as LamaNode depending on the value category
-interface ExprGen extends CatGenInterface<LamaNode> {}
-
-// Constructs closures, and then generates an expression as LamaNode
-interface ScopeGen extends GenInterface<Void, CatGenInterface<LamaNode>> {}
 
 // Generates a list of expressions as List<LamaNode> depending on the value category
 interface GenInterfaces<T, R> extends GenInterface<T, List<R>> {
@@ -111,7 +102,25 @@ interface GenInterfaces<T, R> extends GenInterface<T, List<R>> {
                         .generate(v);
     }
 
-    static <T, R> GenInterfaces<T, R> sequence(List<GenInterface<T, R>> l) {
+    static <T, R> GenInterfaces<T, R> sequence(List<? extends GenInterface<T, R>> l) {
         return v -> l.stream().map(el -> el.generate(v)).collect(Collectors.toList());
+    }
+}
+
+// Generates an expression as LamaNode depending on the value category
+interface ExprGen extends GenInterface<ValueCategory, LamaNode> {}
+interface ValGen extends GenInterface<Void, LamaNode> {}
+
+// Constructs closures, and then generates an expression as LamaNode(s)
+interface ScopedExprGen extends GenInterface<ValueCategory, GenInterface<Void, LamaNode>> {}
+interface ScopedExprsGen extends GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> {
+    static ScopedExprsGen of() {
+        return GenInterfaces.<ValueCategory, GenInterface<Void, LamaNode>>of()::generate;
+    }
+}
+interface ScopedValGen extends GenInterface<Void, GenInterface<Void, LamaNode>> {}
+interface ScopedValsGen extends GenInterfaces<Void, GenInterface<Void, LamaNode>> {
+    static ScopedValsGen of() {
+        return GenInterfaces.<Void, GenInterface<Void, LamaNode>>of()::generate;
     }
 }

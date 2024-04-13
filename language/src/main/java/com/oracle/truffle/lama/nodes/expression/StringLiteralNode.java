@@ -56,7 +56,7 @@ public abstract class StringLiteralNode extends LamaNode {
     }
 
     @Specialization
-    public char[] execute() {
+    public char[] create() {
         return Arrays.copyOf(value, value.length);
     }
 }

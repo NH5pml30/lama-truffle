@@ -74,7 +74,8 @@ public abstract class LamaNode extends Node {
         return LamaTypesGen.expectLamaFunction(this.execute(virtualFrame));
     }
 
-    public MaterializedFrame executeMaterializedFrame(VirtualFrame virtualFrame) throws UnexpectedResultException {
-        return LamaTypesGen.expectMaterializedFrame(this.execute(virtualFrame));
+    public VirtualFrame executeVirtualFrame(VirtualFrame virtualFrame) throws UnexpectedResultException {
+        return LamaTypesGen.expectVirtualFrame(this.execute(virtualFrame));
     }
 }
+

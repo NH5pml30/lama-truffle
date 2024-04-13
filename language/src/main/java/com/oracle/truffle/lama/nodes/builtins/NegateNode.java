@@ -43,9 +43,9 @@ package com.oracle.truffle.lama.nodes.builtins;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 
-public abstract class MulNode extends BuiltinNode {
+public abstract class NegateNode extends BuiltinNode {
     @Specialization
-    protected int mul(int left, int right) {
-        return left * right;
+    protected int negate(int arg) {
+        return -arg;
     }
 }

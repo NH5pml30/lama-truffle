@@ -2,6 +2,7 @@ package com.oracle.truffle.lama.nodes.builtins;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.runtime.LamaSExp;
@@ -41,6 +42,7 @@ public class SExpNode extends LamaNode {
     }
 
     @Override
+    @ExplodeLoop
     public LamaSExp executeLamaSExp(VirtualFrame virtualFrame) {
         CompilerAsserts.compilationConstant(vals.length);
 

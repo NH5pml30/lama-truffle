@@ -7,6 +7,7 @@ import com.oracle.truffle.lama.nodes.scope.ReadGlobalNodeFactory;
 import com.oracle.truffle.lama.nodes.scope.ReadLocalNodeFactory;
 import com.oracle.truffle.lama.runtime.LamaRef;
 import org.graalvm.collections.Pair;
+import org.graalvm.polyglot.Value;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -23,32 +24,32 @@ class LexicalScope {
     protected final Map<String, Integer> locals = new HashMap<>();
     protected final Map<String, Pair<Closure, Integer>> funs = new HashMap<>();
     public final LamaOperators.OperatorInfo operatorInfo;
-    protected GenInterfaces<Void, GenInterface<Void, LamaNode>> inits;
+    protected ScopedValsGen inits;
 
     protected LexicalFuncScope getFuncScope() {
         return outer.getFuncScope();
     }
 
-    public boolean isGlobal() {
+    boolean isGlobal() {
         return getFuncScope().isGlobal();
     }
 
-    public LexicalScope(LexicalScope outer) {
-        this(outer, GenInterfaces.of());
+    LexicalScope(LexicalScope outer) {
+        this(outer, ScopedValsGen.of());
     }
 
-    public LexicalScope(LexicalScope outer, GenInterfaces<Void, GenInterface<Void, LamaNode>> inits) {
+    LexicalScope(LexicalScope outer, ScopedValsGen inits) {
         this.outer = outer;
         this.operatorInfo = getOperatorInfo(outer).clone();
         this.inits = inits;
     }
 
-    public void pullLocalValues(LexicalScope from) {
+    void pullLocalValues(LexicalScope from) {
         inits = from.inits;
-        from.inits = GenInterfaces.of();
+        from.inits = ScopedValsGen.of();
     }
 
-    public interface RefGen extends ExprGen {
+    interface RefGen extends ExprGen {
         LamaNode generateVal();
         LamaRef generateRef();
 
@@ -76,7 +77,7 @@ class LexicalScope {
         };
     }
 
-    protected static abstract class FindResult {
+    static abstract class FindResult {
         protected final LexicalScope source;
         final String name;
 
@@ -94,8 +95,6 @@ class LexicalScope {
         ExprGen instantiate() {
             return a -> {
                 var lambdaNode = lambda.generate(ValueCategory.Val);
-                // System.err.format("instantiate closure '%s' + lambda node '%s'\nClosure:\n", closure.getParent().toString(), lambdaNode.toString());
-                // closure.getParent().print();
                 return closure.getNode()
                         .map(node -> (LamaNode) SetClosureNodeFactory.create(lambdaNode, node))
                         .orElse(lambdaNode);
@@ -103,7 +102,7 @@ class LexicalScope {
         }
     }
 
-    protected static class FunFindResult extends FindResult {
+    static class FunFindResult extends FindResult {
         private final Closure.Instantiation closure;
         private final FindResult lambda;
 
@@ -120,13 +119,13 @@ class LexicalScope {
 
         @Override
         void propagate(LexicalFuncScope through, boolean isBinding) {
-            // System.err.format("Propagate fun '%s'\n", name);
-            lambda.propagate(through, isBinding);
+            // don't save lambda, properly search for the function every time and instantiate the closure
+            lambda.propagate(through, false);
             closure.propagate(through);
         }
     }
 
-    protected static class RefFindResult extends FindResult {
+    static class RefFindResult extends FindResult {
         private ExprGen result;
 
         RefFindResult(LexicalScope source, String name, ExprGen result) {
@@ -141,13 +140,14 @@ class LexicalScope {
 
         @Override
         void propagate(LexicalFuncScope through, boolean isBinding) {
-            // System.err.format("Propagate ref '%s'\n", name);
             if (source.isGlobal()) {
-                // System.err.println("Nvm, it's global");
                 return;
             }
             result = through.closure.propagate(
-                    new Capture<>(result.generate(ValueCategory.Val), source, name),
+                    new Capture<>(
+                            result.generate(ValueCategory.Val), // not a closure instantiation, safe to generate here
+                            source, name
+                    ),
                     isBinding
             );
         }
@@ -160,22 +160,17 @@ class LexicalScope {
         return refGen(ReadLocalNodeFactory.create(slot), LamaRef.local(slot));
     }
 
-    protected void assignLocalValue(int slot, GenInterface<Void, GenInterface<Void, LamaNode>> value) {
-        inits = GenInterfaces.add(inits, v -> {
-            var namesResolved = value.generate(null);
-            if (namesResolved == null) {
-                return null; // propagate `skip`
-            }
-            return vv -> {
-                var valueNode = namesResolved.generate(null);
-                return AssignNodeFactory.create(
-                        new LamaNode[]{getLocal(slot).generate(ValueCategory.Ref), valueNode}
-                );
-            };
-        });
+    protected void assignLocalValue(int slot, ScopedValGen value) {
+        inits = GenInterfaces.add(inits, GenInterface.map(
+                value,
+                v -> v == null
+                        ? null // propagate `skip`
+                        : GenInterface.map(v, vn -> AssignNodeFactory.create(
+                        new LamaNode[]{getLocal(slot).generate(ValueCategory.Ref), vn}
+                ))))::generate;
     }
 
-    public boolean addLocalValue(String name, GenInterface<Void, GenInterface<Void, LamaNode>> value) {
+    boolean addLocalValue(String name, ScopedValGen value) {
         if (locals.containsKey(name)) {
             return false;
         }
@@ -190,16 +185,15 @@ class LexicalScope {
         return slot;
     }
 
-    public RefGen getOrAddLocal(String name) {
+    RefGen getOrAddLocal(String name) {
         return getLocal(Optional.ofNullable(locals.get(name))
                 .orElseGet(() -> addLocal(name)));
     }
 
-    public RefGen addFun(String name, Closure closure, GenInterface<Void, GenInterface<Void, LamaNode>> value) {
+    void addFun(String name, Closure closure, ScopedValGen value) {
         var slot = addLocalSlot(name);
         funs.put(name, Pair.create(closure, slot));
         assignLocalValue(slot, value);
-        return getLocal(slot);
     }
 
     protected int addLocalSlot(String name) {
@@ -213,13 +207,19 @@ class LexicalScope {
 
     protected Optional<FindResult> findHere(String name) {
         // Try funs
-        // TODO: copy-paste
         return Optional.ofNullable(funs.get(name)).map(
                 fun -> new FunFindResult(
                         this, name,
                         fun.getLeft().instantiate(this),
                         new RefFindResult(this, name, getLocal(fun.getRight()))
                 )
+        );
+    }
+
+    protected Optional<FindResult> findHereCapture(String name) {
+        // Try funs
+        return Optional.ofNullable(funs.get(name)).map(
+                fun -> new RefFindResult(this, name, getLocal(fun.getRight()))
         );
     }
 
@@ -232,15 +232,17 @@ class LexicalScope {
         return outerFind.get();
     }
 
-    public Optional<FindResult> find(String name) {
+    // General find, return variable reference potentially with closure instantiation
+    Optional<FindResult> find(String name) {
         return findHere(name)
                 .or(() -> findHereRef(name))
                 .or(() -> findUp(() -> outer.find(name), true));
     }
 
-    public Optional<FindResult> find(Capture<?> capture) {
+    // Find for closure, return only RefFindResult without closure instantiations
+    Optional<FindResult> find(Capture<?> capture) {
         if (capture.source() == this) {
-            return findHere(capture.name())
+            return findHereCapture(capture.name())
                     .or(() -> findHereRef(capture.name()));
         }
         return findUp(() -> outer.find(capture), false);
@@ -256,7 +258,7 @@ class LexicalScope {
         }
     }
 
-    <T> T getBlock(Function<GenInterfaces<Void, GenInterface<Void, LamaNode>>, T> get) {
+    <T> T getBlock(Function<ScopedValsGen, T> get) {
         return get.apply(inits);
     }
 }

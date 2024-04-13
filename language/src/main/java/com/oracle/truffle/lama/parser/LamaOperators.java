@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+// Lama operators: builtins + user-defined operators support
 public class LamaOperators {
     enum OpType {
         InfixLeft, InfixRight, InfixNone
@@ -62,6 +63,9 @@ public class LamaOperators {
                     )
             )
     );
+
+    static final Map<String, NodeFactory<? extends BuiltinNode>> BUILTIN_UNARY_OPERATOR_INFO =
+            Map.of("-", NegateNodeFactory.getInstance());
 
     static class OperatorInfo implements Cloneable {
         List<Pair<OpType, Set<String>>> data;
@@ -135,7 +139,6 @@ public class LamaOperators {
 
     // Make sure lhs of := becomes a Ref
     static ValueCategory op2cat(String name) {
-        // System.out.format("Check lvalue: %s\n", t.getText());
         return Objects.equals(name, ":=") ? ValueCategory.Ref : ValueCategory.Val;
     }
 }

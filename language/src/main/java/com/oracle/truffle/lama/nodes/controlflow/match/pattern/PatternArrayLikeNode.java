@@ -6,9 +6,11 @@ import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.nodes.LamaNode;
 import com.oracle.truffle.lama.nodes.controlflow.match.PatGen;
 import com.oracle.truffle.lama.nodes.expression.IntLiteralNode;
+import com.oracle.truffle.lama.nodes.expression.IntLiteralNodeFactory;
 import com.oracle.truffle.lama.nodes.scope.ReadElementNode;
 import com.oracle.truffle.lama.nodes.scope.ReadElementNodeFactory;
 
@@ -21,7 +23,7 @@ abstract class PatternChildLikeNode extends PatternNode {
 
     PatternChildLikeNode(LamaNode value, int index, PatGen patGen) {
         super(value);
-        this.element = ReadElementNodeFactory.create(value, new IntLiteralNode(index));
+        this.element = ReadElementNodeFactory.create(value, IntLiteralNodeFactory.create(index));
         this.pat = patGen.apply(this.element);
     }
 
@@ -41,6 +43,7 @@ public abstract class PatternArrayLikeNode extends PatternNode {
                 .toArray(PatternChildLikeNode[]::new);
     }
 
+    @ExplodeLoop
     protected int match(VirtualFrame frame, Object[] value) {
         if (value.length != pats.length) {
             return 0;

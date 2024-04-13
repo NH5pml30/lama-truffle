@@ -89,6 +89,10 @@ public void SemErr(Token token, String message) {
     throw factory.newSemErr(token, message);
 }
 
+private static boolean checkPrec(int cur, int low, int high) {
+  return cur >= low && cur <= high;
+}
+
 private static void throwParseError(Source source, int line, int charPositionInLine, Token token, String message) {
     throw LamaNodeFactory.newParseError(source, line, charPositionInLine, token, message);
 }
@@ -123,16 +127,16 @@ scopeDefinitions :
     definition*
 ;
 
-scopeExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+scopeExpression returns [ScopedExprGen result] :
     { factory.startBlock(); }
     scopeDefinitions
     expression  { $result = factory.finishBlock($expression.result); }
 ;
 
-scopeExpression0 returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+scopeExpression0 returns [ScopedExprGen result] :
     { factory.startBlock(); }
     scopeDefinitions
-    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> gen = GenInterfaces.of(); }
+    { ScopedExprsGen gen = ScopedExprsGen.of(); }
     (
         expression
         { gen = $expression.result; }
@@ -158,7 +162,7 @@ variableDefinitionSequence :
     )*
 ;
 
-variableDefinitionItem returns [Token name, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> value] :
+variableDefinitionItem returns [Token name, ScopedExprGen value] :
     LIDENT { $name = $LIDENT; $value = factory.createSkip($LIDENT); }
     |
     LIDENT '=' basicExpression[0] { $name = $LIDENT; $value = $basicExpression.result; }
@@ -200,9 +204,9 @@ functionPatArguments returns [List<PatGen> result] :
     )?
 ;
 
-functionBody returns [GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> result] :
+functionBody returns [ScopedExprsGen result] :
     scopeDefinitions
-    { $result = GenInterfaces.of(); }
+    { $result = ScopedExprsGen.of(); }
     (
         expression
         { $result = $expression.result; }
@@ -227,38 +231,39 @@ level returns [Token relOp, int rel] :
     OP { $relOp = $OP; }
 ;
 
-expression returns [GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> result] :
-    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result); }
+expression returns [ScopedExprsGen result] :
+    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result)::generate; }
     |
-    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result); }
-    ';' expression     { $result = GenInterfaces.concat(GenInterface.konst($result, ValueCategory.Val), $expression.result); }
+    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result)::generate; }
+    ';' expression     { $result = GenInterfaces.concat(GenInterface.konst($result, ValueCategory.Val), $expression.result)::generate; }
 ;
 
-basicExpression [int _p] returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
-    primaryExpression { $result = $primaryExpression.result; }
+basicExpression [int _p] returns [ScopedExprGen result, int _r] :
+    primaryExpression { $result = $primaryExpression.result; $_r = Integer.MAX_VALUE; }
     (
-        {factory.getPrecedence(_input.LT(1)) >= $_p}?
-        op=OP rhs=basicExpression[factory.getNextPrecedence($op)] // TODO: fix non-assoc
+        {checkPrec(factory.getPrecedence(_input.LT(1)), $_p, $_r)}?
+        op=OP rhs=basicExpression[factory.getRightPrecedence($op)]
         { $result = factory.createBinary($op, $result, $rhs.result); }
+        { $_r = factory.getNextPrecedence($op); }
     )*
 ;
 
-primaryExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+primaryExpression returns [ScopedExprGen result] :
     primary { $result = $primary.result; }
     (
         '[' expression ']' { $result = factory.createElement($result, factory.finishSeq($expression.result)); }
         |
         functionParams { $result = factory.createCall($result, $functionParams.args, $functionParams.t); }
         |
-        t='.' LIDENT { List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args = new ArrayList<>(); args.add($result); }
+        t='.' LIDENT { List<ScopedExprGen> args = new ArrayList<>(); args.add($result); }
         (
             functionParams { args.addAll($functionParams.args); }
         )?
-        { $result = factory.createCall(factory.createRead($LIDENT), args, $t); }
+        { $result = factory.createCall(factory.createSymbol($LIDENT), args, $t); }
     )*
 ;
 
-functionParams returns [List<GenInterface<ValueCategory, GenInterface<Void, LamaNode>>> args, Token t] :
+functionParams returns [List<ScopedExprGen> args, Token t] :
     tt='(' { $args = new ArrayList<>(); $t = $tt; }
     (
         scopeExpression { $args.add($scopeExpression.result); }
@@ -269,20 +274,22 @@ functionParams returns [List<GenInterface<ValueCategory, GenInterface<Void, Lama
     ')'
 ;
 
-primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+primary returns [ScopedExprGen result] :
     d=DECIMAL { $result = factory.createIntLiteral($d); } |
     s=STRING { $result = factory.createStringLiteral($s); } |
     c=CHAR { $result = factory.createCharLiteral($c); } |
-    i=LIDENT { $result = factory.createRead($i); } |
+    i=LIDENT { $result = factory.createSymbol($i); } |
+    tru='true' { $result = factory.createTrue($tru); } |
+    fls='false' { $result = factory.createFalse($fls); } |
     'infix' OP { $result = factory.createInfix($OP); }
     |
     t='fun'
     functionArgumentsAndBody["<lambda>", $t]
-    { $result = factory.genValue($functionArgumentsAndBody.result.instantiate(), $t); }
+    { $result = factory.genValue($functionArgumentsAndBody.result.instantiate(), $t)::generate; }
     |
     t='skip' { $result = factory.createSkip($t); } |
     op=OP d=DECIMAL { $result = factory.createIntLiteral($op, $d); } |
-    OP basicExpression[0] | // TODO: fix!!!
+    OP basicExpression[0] { $result = factory.createUnary($OP, $basicExpression.result); } |
     '(' scopeExpression ')' { $result = $scopeExpression.result; } |
     listExpression { $result = $listExpression.result; } |
     arrayExpression { $result = $arrayExpression.result; } |
@@ -295,8 +302,8 @@ primary returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resul
     etaExpression { $result = $etaExpression.result; }
 ;
 
-ifExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
-    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> falsePart; }
+ifExpression returns [ScopedExprGen result] :
+    { ScopedExprGen falsePart; }
     t='if' expression
     'then' scopeExpression
     { falsePart = factory.createSkip($t); }
@@ -307,8 +314,8 @@ ifExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> 
     'fi'
 ;
 
-elsePart returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
-    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> falsePart; }
+elsePart returns [ScopedExprGen result] :
+    { ScopedExprGen falsePart; }
     t='elif' expression
     'then' scopeExpression
     { falsePart = factory.createSkip($t); }
@@ -320,90 +327,90 @@ elsePart returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> resu
     'else' scopeExpression { $result = $scopeExpression.result; }
 ;
 
-whileDoExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+whileDoExpression returns [ScopedExprGen result] :
     t='while' expression
     'do' scopeExpression
     { $result = factory.createWhileDo(factory.finishSeq($expression.result), $scopeExpression.result, $t); }
     'od'
 ;
 
-doWhileExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+doWhileExpression returns [ScopedExprGen result] :
     t='do' { var scope = factory.startBlock(); }
     defs=scopeDefinitions
     { factory.startBlock(); factory.pullLocalValues(scope); }
-    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> body = GenInterfaces.of(); }
+    { ScopedExprsGen body = ScopedExprsGen.of(); }
     (
         expression { body = $expression.result; }
     )?
-    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> bodyNode = factory.finishBlock(body); }
+    { ScopedExprGen bodyNode = factory.finishBlock(body); }
     'while' cond=expression
     { $result = factory.finishBlock(GenInterfaces.of(
               factory.createDoWhile(bodyNode, factory.finishSeq($cond.result), $t)
-      )); }
+      )::generate); }
     'od'
 ;
 
-forExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+forExpression returns [ScopedExprGen result] :
     t='for' { factory.startBlock(); }
     defs=scopeDefinitions
-    { GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> init = GenInterfaces.of(); }
+    { ScopedExprsGen init = ScopedExprsGen.of(); }
     (
         expression { init = $expression.result; }
     )?
-    { GenInterface<ValueCategory, GenInterface<Void, LamaNode>> initNode = factory.finishSeq(init); }
+    { ScopedExprGen initNode = factory.finishSeq(init); }
     ',' cond=expression
     ',' step=expression
     'do' scopeExpression0
     { $result = factory.finishBlock(GenInterfaces.of(
               factory.createForLoop(initNode, factory.finishSeq($cond.result), factory.finishSeq($step.result), $scopeExpression0.result, $t)
-      )); }
+      )::generate); }
     'od'
 ;
 
-arrayExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
-    t='[' { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
+arrayExpression returns [ScopedExprGen result] :
+    t='[' { ScopedValsGen vals = ScopedValsGen.of(); }
     (
-        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         )*
     )?
     ']' { $result = factory.createArray(vals, $t); }
 ;
 
-sExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+sExpression returns [ScopedExprGen result] :
     t=UIDENT
-    { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
+    { ScopedValsGen vals = ScopedValsGen.of(); }
     (
-        '(' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+        '(' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         )*
         ')'
     )?
     { $result = factory.createSExp($t.getText(), vals, $t); }
 ;
 
-listExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+listExpression returns [ScopedExprGen result] :
     t='{'
-    { GenInterfaces<Void, GenInterface<Void, LamaNode>> vals = GenInterfaces.of(); }
+    { ScopedValsGen vals = ScopedValsGen.of(); }
     (
-        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val)); }
+            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
         )*
     )? '}'
     { $result = factory.createList(vals, $t); }
 ;
 
-caseExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+caseExpression returns [ScopedExprGen result] :
     'case' expression
     'of' caseBranches
     'esac'
     { $result = factory.createPatternMatch(factory.finishSeq($expression.result), $caseBranches.result); }
 ;
 
-caseBranches returns [List<Pair<PatGen, GenInterface<ValueCategory, GenInterface<Void, LamaNode>>>> result] :
+caseBranches returns [List<Pair<PatGen, ScopedExprGen>> result] :
     { $result = new ArrayList<>(); }
     caseBranch { $result.add(Pair.create($caseBranch.pat, $caseBranch.returns)); }
     (
@@ -411,10 +418,10 @@ caseBranches returns [List<Pair<PatGen, GenInterface<ValueCategory, GenInterface
     )*
 ;
 
-caseBranch returns [PatGen pat, GenInterface<ValueCategory, GenInterface<Void, LamaNode>> returns] :
+caseBranch returns [PatGen pat, ScopedExprGen returns] :
     { factory.startBlock(); }
     pattern { $pat = $pattern.result; } '->'
-    scopeExpression { $returns = factory.finishBlock(GenInterfaces.of($scopeExpression.result)); }
+    scopeExpression { $returns = factory.finishBlock(GenInterfaces.of($scopeExpression.result)::generate); }
 ;
 
 pattern returns [PatGen result] :
@@ -434,6 +441,8 @@ simplePattern returns [PatGen result] :
     |
     d=DECIMAL { $result = factory.createIntValPattern($d.getText()); } |
     op=OP d=DECIMAL { $result = factory.createIntValPattern($op.getText() + $d.getText()); } |
+    tru='true' { $result = factory.createIntValPattern("1"); } |
+    fls='false' { $result = factory.createIntValPattern("0"); } |
     s=STRING { $result = factory.createStrValPattern($s.getText()); }
     |
     '#fun' { $result = factory.createFunPattern(); } |
@@ -486,224 +495,16 @@ arrayPattern returns [PatGen result] :
     { $result = factory.createArrayPattern(pats); }
 ;
 
-etaExpression returns [GenInterface<ValueCategory, GenInterface<Void, LamaNode>> result] :
+etaExpression returns [ScopedExprGen result] :
     t='eta' { String synthName = factory.freshName(); factory.startFunction(List.of(synthName), "<eta>"); }
     basicExpression[0]
     {
-      var params = List.of(factory.createRead(synthName, $t));
+      var params = List.of(factory.createSymbol(synthName, $t));
       var func = $basicExpression.result;
-      var fun = factory.finishFunction(GenInterfaces.of(factory.createCall(func, params, $t))).instantiate();
-      $result = factory.genValue(fun, $t);
+      var fun = factory.finishFunction(GenInterfaces.of(factory.createCall(func, params, $t))::generate).instantiate();
+      $result = factory.genValue(fun, $t)::generate;
     }
 ;
-
-/*
-function
-:
-'function'
-IDENTIFIER
-s='('
-                                                { factory.startFunction($IDENTIFIER, $s); }
-(
-    IDENTIFIER                                  { factory.addFormalParameter($IDENTIFIER); }
-    (
-        ','
-        IDENTIFIER                              { factory.addFormalParameter($IDENTIFIER); }
-    )*
-)?
-')'
-body=block[false]                               { factory.finishFunction($body.result); }
-;
-
-
-
-block [boolean inLoop] returns [SLStatementNode result]
-:                                               { factory.startBlock();
-                                                  List<SLStatementNode> body = new ArrayList<>(); }
-s='{'
-(
-    statement[inLoop]                           { body.add($statement.result); }
-)*
-e='}'
-                                                { $result = factory.finishBlock(body, $s.getStartIndex(), $e.getStopIndex() - $s.getStartIndex() + 1); }
-;
-
-
-statement [boolean inLoop] returns [SLStatementNode result]
-:
-(
-    while_statement                             { $result = $while_statement.result; }
-|
-    b='break'                                   { if (inLoop) { $result = factory.createBreak($b); } else { SemErr($b, "break used outside of loop"); } }
-    ';'
-|
-    c='continue'                                { if (inLoop) { $result = factory.createContinue($c); } else { SemErr($c, "continue used outside of loop"); } }
-    ';'
-|
-    if_statement[inLoop]                        { $result = $if_statement.result; }
-|
-    return_statement                            { $result = $return_statement.result; }
-|
-    expression ';'                              { $result = $expression.result; }
-|
-    d='debugger'                                { $result = factory.createDebugger($d); }
-    ';'
-)
-;
-
-
-while_statement returns [SLStatementNode result]
-:
-w='while'
-'('
-condition=expression
-')'
-body=block[true]                                { $result = factory.createWhile($w, $condition.result, $body.result); }
-;
-
-
-if_statement [boolean inLoop] returns [SLStatementNode result]
-:
-i='if'
-'('
-condition=expression
-')'
-then=block[inLoop]                              { SLStatementNode elsePart = null; }
-(
-    'else'
-    block[inLoop]                               { elsePart = $block.result; }
-)?                                              { $result = factory.createIf($i, $condition.result, $then.result, elsePart); }
-;
-
-
-return_statement returns [SLStatementNode result]
-:
-r='return'                                      { SLExpressionNode value = null; }
-(
-    expression                                  { value = $expression.result; }
-)?                                              { $result = factory.createReturn($r, value); }
-';'
-;
-
-
-expression returns [SLExpressionNode result]
-:
-logic_term                                      { $result = $logic_term.result; }
-(
-    op='||'
-    logic_term                                  { $result = factory.createBinary($op, $result, $logic_term.result); }
-)*
-;
-
-
-logic_term returns [SLExpressionNode result]
-:
-logic_factor                                    { $result = $logic_factor.result; }
-(
-    op='&&'
-    logic_factor                                { $result = factory.createBinary($op, $result, $logic_factor.result); }
-)*
-;
-
-
-logic_factor returns [SLExpressionNode result]
-:
-arithmetic                                      { $result = $arithmetic.result; }
-(
-    op=('<' | '<=' | '>' | '>=' | '==' | '!=' )
-    arithmetic                                  { $result = factory.createBinary($op, $result, $arithmetic.result); }
-)?
-;
-
-
-arithmetic returns [SLExpressionNode result]
-:
-term                                            { $result = $term.result; }
-(
-    op=('+' | '-')
-    term                                        { $result = factory.createBinary($op, $result, $term.result); }
-)*
-;
-
-
-term returns [SLExpressionNode result]
-:
-factor                                          { $result = $factor.result; }
-(
-    op=('*' | '/')
-    factor                                      { $result = factory.createBinary($op, $result, $factor.result); }
-)*
-;
-
-
-factor returns [SLExpressionNode result]
-:
-(
-    IDENTIFIER                                  { SLExpressionNode assignmentName = factory.createStringLiteral($IDENTIFIER, false); }
-    (
-        member_expression[null, null, assignmentName] { $result = $member_expression.result; }
-    |
-                                                { $result = factory.createRead(assignmentName); }
-    )
-|
-    STRING_LITERAL                              { $result = factory.createStringLiteral($STRING_LITERAL, true); }
-|
-    NUMERIC_LITERAL                             { $result = factory.createNumericLiteral($NUMERIC_LITERAL); }
-|
-    s='('
-    expr=expression
-    e=')'                                       { $result = factory.createParenExpression($expr.result, $s.getStartIndex(), $e.getStopIndex() - $s.getStartIndex() + 1); }
-)
-;
-
-
-member_expression [SLExpressionNode r, SLExpressionNode assignmentReceiver, SLExpressionNode assignmentName] returns [SLExpressionNode result]
-:                                               { SLExpressionNode receiver = r;
-                                                  SLExpressionNode nestedAssignmentName = null; }
-(
-    '('                                         { List<SLExpressionNode> parameters = new ArrayList<>();
-                                                  if (receiver == null) {
-                                                      receiver = factory.createRead(assignmentName);
-                                                  } }
-    (
-        expression                              { parameters.add($expression.result); }
-        (
-            ','
-            expression                          { parameters.add($expression.result); }
-        )*
-    )?
-    e=')'
-                                                { $result = factory.createCall(receiver, parameters, $e); }
-|
-    '='
-    expression                                  { if (assignmentName == null) {
-                                                      SemErr($expression.start, "invalid assignment target");
-                                                  } else if (assignmentReceiver == null) {
-                                                      $result = factory.createAssignment(assignmentName, $expression.result);
-                                                  } else {
-                                                      $result = factory.createWriteProperty(assignmentReceiver, assignmentName, $expression.result);
-                                                  } }
-|
-    '.'                                         { if (receiver == null) {
-                                                       receiver = factory.createRead(assignmentName);
-                                                  } }
-    IDENTIFIER
-                                                { nestedAssignmentName = factory.createStringLiteral($IDENTIFIER, false);
-                                                  $result = factory.createReadProperty(receiver, nestedAssignmentName); }
-|
-    '['                                         { if (receiver == null) {
-                                                      receiver = factory.createRead(assignmentName);
-                                                  } }
-    expression
-                                                { nestedAssignmentName = $expression.result;
-                                                  $result = factory.createReadProperty(receiver, nestedAssignmentName); }
-    ']'
-)
-(
-    member_expression[$result, receiver, nestedAssignmentName] { $result = $member_expression.result; }
-)?
-;
-*/
 
 // lexer
 

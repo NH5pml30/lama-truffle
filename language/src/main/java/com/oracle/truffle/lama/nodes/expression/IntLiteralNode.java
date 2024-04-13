@@ -40,20 +40,19 @@
  */
 package com.oracle.truffle.lama.nodes.expression;
 
+import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.NodeField;
+import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
-public final class IntLiteralNode extends LamaNode {
-    private final int value;
-
-    public IntLiteralNode(int value) {
-        this.value = value;
-    }
-
-    @Override
-    public Object execute(VirtualFrame frame) {
+@GenerateNodeFactory
+@NodeField(name = "value", type = int.class)
+public abstract class IntLiteralNode extends LamaNode {
+    @Specialization
+    public int create(int value) {
         return value;
     }
 }

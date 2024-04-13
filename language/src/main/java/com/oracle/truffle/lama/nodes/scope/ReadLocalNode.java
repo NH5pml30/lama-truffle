@@ -1,19 +1,31 @@
 package com.oracle.truffle.lama.nodes.scope;
 
+import com.oracle.truffle.api.dsl.Executed;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
-import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
-@NodeField(name = "slot", type = int.class)
+@GenerateNodeFactory
+abstract class GetFrameNode extends LamaNode {
+    @Specialization
+    VirtualFrame get(VirtualFrame frame) {
+        return frame;
+    }
+}
+
 @GenerateNodeFactory
 public abstract class ReadLocalNode extends LamaNode {
-    public abstract int getSlot();
+    @Child @Executed GetFrameNode frameNode;
+    @Child @Executed(with = "frameNode") ReadSlotNode reader;
+
+    ReadLocalNode(int slot) {
+        frameNode = GetFrameNodeFactory.create();
+        reader = ReadSlotNodeFactory.create(frameNode, slot);
+    }
 
     @Specialization
-    public Object read(VirtualFrame virtualFrame) {
-        return virtualFrame.getValue(this.getSlot());
+    Object read(VirtualFrame frameToo, Object readValue) {
+        return readValue;
     }
 }

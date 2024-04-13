@@ -2,6 +2,7 @@ package com.oracle.truffle.lama.nodes.builtins;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
 public class ArrayNode extends LamaNode {
@@ -17,6 +18,7 @@ public class ArrayNode extends LamaNode {
     }
 
     @Override
+    @ExplodeLoop
     public Object[] executeObjectArray(VirtualFrame virtualFrame) {
         CompilerAsserts.compilationConstant(vals.length);
 

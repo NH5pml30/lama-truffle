@@ -15,6 +15,6 @@ import com.oracle.truffle.lama.nodes.LamaNode;
 public abstract class SetClosureNode extends LamaNode {
     @Specialization
     LamaFunction set(LamaFunction lambda, MaterializedFrame closure) {
-        return new LamaFunction(lambda.callTarget(), closure);
+        return new LamaFunction(lambda.callTarget(), closure, lambda.name());
     }
 }

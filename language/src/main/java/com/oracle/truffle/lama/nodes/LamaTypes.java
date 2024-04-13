@@ -42,8 +42,9 @@ package com.oracle.truffle.lama.nodes;
 
 import com.oracle.truffle.api.dsl.TypeSystem;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.lama.runtime.*;
 
-@TypeSystem({int.class, LamaFunction.class, LamaRef.class, LamaSExp.class, char[].class, Object[].class, MaterializedFrame.class})
+@TypeSystem({int.class, LamaFunction.class, LamaRef.class, LamaSExp.class, char[].class, Object[].class, VirtualFrame.class})
 public abstract class LamaTypes {
 }

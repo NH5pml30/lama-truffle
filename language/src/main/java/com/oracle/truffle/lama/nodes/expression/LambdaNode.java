@@ -9,10 +9,11 @@ import com.oracle.truffle.lama.runtime.LamaFunction;
 import com.oracle.truffle.lama.nodes.LamaNode;
 
 @NodeField(name = "callTarget", type = RootCallTarget.class)
+@NodeField(name = "name", type = String.class)
 @GenerateNodeFactory
 public abstract class LambdaNode extends LamaNode {
     @Specialization
-    LamaFunction function(RootCallTarget callTarget) {
-        return new LamaFunction(callTarget, null);
+    LamaFunction function(RootCallTarget callTarget, String name) {
+        return new LamaFunction(callTarget, null, name);
     }
 }
