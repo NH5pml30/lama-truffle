@@ -107,20 +107,40 @@ interface GenInterfaces<T, R> extends GenInterface<T, List<R>> {
     }
 }
 
+interface ScopedsGen<T> extends GenInterface<T, GenInterfaces<Void, LamaNode>> {
+    static <T> ScopedsGen<T> of() {
+        return GenInterface.lift(GenInterfaces.<Void, LamaNode>of())::generate;
+    }
+
+    static <T> ScopedsGen<T> of(GenInterface<T, GenInterface<Void, LamaNode>> r) {
+        return GenInterface.map(r, GenInterfaces::of)::generate;
+    }
+
+    static <T> ScopedsGen<T> add(GenInterface<Void, GenInterfaces<Void, LamaNode>> lhs,
+                                 GenInterface<T, GenInterface<Void, LamaNode>> rhs) {
+        return GenInterface.lift2(GenInterface.forget(lhs), rhs, GenInterfaces::add)::generate;
+    }
+
+    static <T> ScopedsGen<T> concat(GenInterface<Void, GenInterfaces<Void, LamaNode>> lhs,
+                                    GenInterface<T, GenInterfaces<Void, LamaNode>> rhs) {
+        return GenInterface.lift2(GenInterface.forget(lhs), rhs, GenInterfaces::concat)::generate;
+    }
+}
+
 // Generates an expression as LamaNode depending on the value category
-interface ExprGen extends GenInterface<ValueCategory, LamaNode> {}
+interface ExprGen extends GenInterface<ValueCategory, LamaNode> {
+    static <T> GenInterface<Void, T> konstVal(GenInterface<ValueCategory, T> r) {
+        return GenInterface.konst(r, ValueCategory.Val);
+    }
+
+    static <T> GenInterface<ValueCategory, T> overrideVal(GenInterface<ValueCategory, T> r) {
+        return GenInterface.forget(konstVal(r));
+    }
+}
 interface ValGen extends GenInterface<Void, LamaNode> {}
 
 // Constructs closures, and then generates an expression as LamaNode(s)
 interface ScopedExprGen extends GenInterface<ValueCategory, GenInterface<Void, LamaNode>> {}
-interface ScopedExprsGen extends GenInterfaces<ValueCategory, GenInterface<Void, LamaNode>> {
-    static ScopedExprsGen of() {
-        return GenInterfaces.<ValueCategory, GenInterface<Void, LamaNode>>of()::generate;
-    }
-}
+interface ScopedExprsGen extends ScopedsGen<ValueCategory> {}
 interface ScopedValGen extends GenInterface<Void, GenInterface<Void, LamaNode>> {}
-interface ScopedValsGen extends GenInterfaces<Void, GenInterface<Void, LamaNode>> {
-    static ScopedValsGen of() {
-        return GenInterfaces.<Void, GenInterface<Void, LamaNode>>of()::generate;
-    }
-}
+interface ScopedValsGen extends ScopedsGen<Void> {}

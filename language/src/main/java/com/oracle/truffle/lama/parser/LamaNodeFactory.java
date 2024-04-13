@@ -185,7 +185,7 @@ public class LamaNodeFactory {
             var name = arguments.get(i);
             r = x -> createPatternMatch(createSymbol(name, t), List.of(Pair.create(pat, x)));
         }
-        return GenInterface.compose(GenInterface.map(r, x -> GenInterfaces.of(x)::generate), this::finishSeq);
+        return GenInterface.compose(GenInterface.map(r, rr -> ScopedsGen.of(rr)::generate), this::finishSeq);
     }
 
     void startMain() {
@@ -210,7 +210,7 @@ public class LamaNodeFactory {
     }
 
     boolean tryAddLocal(Token name, ScopedExprGen value) {
-        return addLocal(name.getText(), GenInterface.konst(value, ValueCategory.Val)::generate);
+        return addLocal(name.getText(), ExprGen.konstVal(value)::generate);
     }
 
     void addLocal(Token name, ScopedExprGen value) {
@@ -229,15 +229,14 @@ public class LamaNodeFactory {
 
     ScopedExprGen finishSeq(ScopedExprsGen body) {
         return GenInterface.map(body, l -> GenInterface.map(
-                GenInterfaces.sequence(l),
-                n -> (LamaNode) new BlockNode(n.toArray(LamaNode[]::new))
+                l, n -> (LamaNode) new BlockNode(n.toArray(LamaNode[]::new))
         ))::generate;
     }
 
     ScopedExprGen finishBlock(ScopedExprsGen body) {
         var scope = popScope();
 
-        return finishSeq(scope.getBlock(inits -> GenInterfaces.concat(inits, body)::generate));
+        return finishSeq(scope.getBlock(inits -> ScopedsGen.concat(inits, body)::generate));
     }
 
     record Fun(Closure closure, ScopedValGen body) {
@@ -259,21 +258,23 @@ public class LamaNodeFactory {
 
         // capture scope
         return scope.getBlock(inits -> scope.getFun((closure, desc) -> {
-            ScopedExprsGen initBody = GenInterfaces.concat(inits, body)::generate;
+            ScopedExprsGen initBody = ScopedsGen.concat(inits, body)::generate;
             if (scope.isGlobal()) {
-                initBody = GenInterfaces.concat(
-                        GenInterfaces.of(GenInterface.lift(GenInterface.lift(SetGlobalScopeNodeFactory.create(desc)))),
+                initBody = ScopedsGen.concat(
+                        ScopedsGen.of(GenInterface.lift(GenInterface.<Void, LamaNode>lift(
+                                SetGlobalScopeNodeFactory.create(desc)
+                        ))::generate),
                         initBody
                 )::generate;
             }
 
-            var bodyGen = GenInterface.konst(GenInterface.map(
+            var bodyGen = ExprGen.konstVal(GenInterface.map(
                     finishSeq(initBody),
                     i -> GenInterface.map(i, node -> (LamaNode) LambdaNodeFactory.create(
                             new LamaRootNode(language, desc, node).getCallTarget(),
                             scope.funName
                     ))
-            ), ValueCategory.Val);
+            ));
             return new Fun(closure, bodyGen::generate);
         }));
     }
@@ -282,11 +283,13 @@ public class LamaNodeFactory {
     RootCallTarget finishMain(ScopedExprsGen body, Token t) {
         var main = finishFunction(body);
         var mainNode = finishSeq(
-                GenInterfaces.of(
-                        GenInterface.konst(createCall(
-                                genValue(main.instantiate(), t)::generate,
-                                List.of(), t
-                        ), ValueCategory.Val),
+                ScopedsGen.add(
+                        ScopedsGen.of(ExprGen.konstVal(
+                                createCall(
+                                        genValue(main.instantiate(), t)::generate,
+                                        List.of(), t
+                                )
+                        )),
                         GenInterface.lift(GenInterface.lift(IntLiteralNodeFactory.create(0)))
                 )::generate
         ).generate(ValueCategory.Val).generate(null);
@@ -302,7 +305,7 @@ public class LamaNodeFactory {
     }
 
     ScopedExprGen createSkip(Token t) {
-        return a -> assertValue(a, null, t);
+        return a -> assertValue(a, GenInterface.lift(null), t);
     }
 
     ScopedExprGen createIntLiteral(Token intLiteral) {
@@ -355,7 +358,7 @@ public class LamaNodeFactory {
                                 .orElseThrow(() -> newSemErr(opToken, "operator not in scope"))
                                 .get().generate(ValueCategory.Val),
                         GenInterface.konst(left, lhsCat),
-                        GenInterface.konst(right, ValueCategory.Val),
+                        ExprGen.konstVal(right),
                         (op, l, r) ->
                                 GenInterface.lift2(l, r, (ln, rn) -> lhsCat == ValueCategory.Ref
                                         ? BUILTIN_OPERATOR_INFO.stream().map(Pair::getRight)
@@ -370,7 +373,7 @@ public class LamaNodeFactory {
     ScopedExprGen createUnary(Token opToken, ScopedExprGen expr) {
         return genValue(
                 GenInterface.map(
-                        GenInterface.konst(expr, ValueCategory.Val),
+                        ExprGen.konstVal(expr),
                         e -> GenInterface.map(e, en ->
                                 (LamaNode) Optional.ofNullable(BUILTIN_UNARY_OPERATOR_INFO.get(opToken.getText()))
                                         .orElseThrow(() -> newSemErr(opToken, "operator not in scope"))
@@ -401,8 +404,8 @@ public class LamaNodeFactory {
     ScopedExprGen createElement(ScopedExprGen arr, ScopedExprGen index) {
         return GenInterface.lift3(
                 (ValueCategory a) -> a,
-                GenInterface.forget(GenInterface.konst(arr, ValueCategory.Val)),
-                GenInterface.forget(GenInterface.konst(index, ValueCategory.Val)),
+                ExprGen.overrideVal(arr),
+                ExprGen.overrideVal(index),
                 (a, ar, in) -> GenInterface.lift2(ar, in,
                         (arn, inn) -> switch (a) {
                             case Val -> ReadElementNodeFactory.create(arn, inn);
@@ -417,10 +420,9 @@ public class LamaNodeFactory {
     }
 
     ScopedExprGen createCall(ScopedExprGen function, List<ScopedExprGen> parameters, Token t) {
-        var functionGen = GenInterface.konst(function, ValueCategory.Val);
-        var parametersGen = GenInterface.konst(
-                GenInterface.map(GenInterfaces.sequence(parameters), GenInterfaces::sequence),
-                ValueCategory.Val
+        var functionGen = ExprGen.konstVal(function);
+        var parametersGen = ExprGen.konstVal(
+                GenInterface.map(GenInterfaces.sequence(parameters), GenInterfaces::sequence)
         );
         return genValue(
                 GenInterface.lift2(functionGen, parametersGen, (fn, pn) ->
@@ -431,28 +433,20 @@ public class LamaNodeFactory {
     }
 
     // elsePart is optional (can be `skip`)
-    ScopedExprGen createIfThenElse(
-            ScopedExprGen condition,
-            ScopedExprGen then,
-            ScopedExprGen elsePart
-    ) {
+    ScopedExprGen createIfThenElse(ScopedExprGen condition, ScopedExprGen then, ScopedExprGen elsePart) {
         return GenInterface.lift3(
-                GenInterface.forget(GenInterface.konst(condition, ValueCategory.Val)),
+                ExprGen.overrideVal(condition),
                 then, elsePart,
-                (c, t, e) -> GenInterface.lift3(c, t, e == null ? v -> null : e,
-                        (cn, tn, en) -> (LamaNode) IfNodeFactory.create(cn, tn, en))
+                (c, t, e) -> GenInterface.lift3(c, t, e,
+                        (cn, tn, maybeEn) -> (LamaNode) IfNodeFactory.create(cn, tn, maybeEn))
         )::generate;
     }
 
-    ScopedExprGen createWhileDo(
-            ScopedExprGen condition,
-            ScopedExprGen body,
-            Token t
-    ) {
+    ScopedExprGen createWhileDo(ScopedExprGen condition, ScopedExprGen body, Token t) {
         return genValue(
                 GenInterface.lift2(
-                        GenInterface.konst(condition, ValueCategory.Val),
-                        GenInterface.konst(body, ValueCategory.Val),
+                        ExprGen.konstVal(condition),
+                        ExprGen.konstVal(body),
                         (cn, bn) ->
                         GenInterface.lift2(cn, bn, (conditionNode, bodyNode) ->
                                 (LamaNode) new WhileDoNode(conditionNode, bodyNode))),
@@ -460,15 +454,11 @@ public class LamaNodeFactory {
         )::generate;
     }
 
-    ScopedExprGen createDoWhile(
-            ScopedExprGen body,
-            ScopedExprGen condition,
-            Token t
-    ) {
+    ScopedExprGen createDoWhile(ScopedExprGen body, ScopedExprGen condition, Token t) {
         return genValue(
                 GenInterface.lift2(
-                        GenInterface.konst(body, ValueCategory.Val),
-                        GenInterface.konst(condition, ValueCategory.Val),
+                        ExprGen.konstVal(body),
+                        ExprGen.konstVal(condition),
                         (bn, cn) ->
                                 GenInterface.lift2(bn, cn, (bodyNode, conditionNode) ->
                                         (LamaNode) new DoWhileNode(bodyNode, conditionNode))),
@@ -476,43 +466,35 @@ public class LamaNodeFactory {
         )::generate;
     }
 
-    ScopedExprGen createForLoop(
-            ScopedExprGen init,
-            ScopedExprGen condition,
-            ScopedExprGen step,
-            ScopedExprGen body,
-            Token t
-    ) {
+    ScopedExprGen createForLoop(ScopedExprGen init, ScopedExprGen condition,
+                                ScopedExprGen step, ScopedExprGen body, Token t) {
         return genValue(
                 GenInterface.lift4(
-                        GenInterface.konst(init, ValueCategory.Val),
-                        GenInterface.konst(condition, ValueCategory.Val),
-                        GenInterface.konst(step, ValueCategory.Val),
-                        GenInterface.konst(body, ValueCategory.Val),
+                        ExprGen.konstVal(init),
+                        ExprGen.konstVal(condition),
+                        ExprGen.konstVal(step),
+                        ExprGen.konstVal(body),
                         (in, cn, sn, bn) ->
                                 GenInterface.lift4(in, cn, sn, bn, (i, c, s, b) -> (LamaNode) new ForNode(i, c, s, b))),
                 t
         )::generate;
     }
 
-    ScopedExprGen createArray(ScopedValsGen vals, Token t) {
+    ScopedExprGen mapValList(List<ScopedValGen> vals, GenInterface<List<LamaNode>, ? extends LamaNode> f, Token t) {
         return genValue(
-                GenInterface.map(vals, l -> GenInterface.map(
+                GenInterface.map(GenInterfaces.sequence(vals), l -> GenInterface.map(
                         GenInterfaces.sequence(l),
-                        n -> (LamaNode) new ArrayNode(n.toArray(LamaNode[]::new))
-                )),
-                t
+                        n -> (LamaNode) f.generate(n)
+                )), t
         )::generate;
     }
 
-    ScopedExprGen createSExp(String name, ScopedValsGen vals, Token t) {
-        return genValue(
-                GenInterface.map(vals, l -> GenInterface.map(
-                        GenInterfaces.sequence(l),
-                        n -> (LamaNode) new SExpNode(name, n.toArray(LamaNode[]::new))
-                )),
-                t
-        )::generate;
+    ScopedExprGen createArray(List<ScopedValGen> vals, Token t) {
+        return mapValList(vals, n -> new ArrayNode(n.toArray(LamaNode[]::new)), t);
+    }
+
+    ScopedExprGen createSExp(String name, List<ScopedValGen> vals, Token t) {
+        return mapValList(vals, n -> new SExpNode(name, n.toArray(LamaNode[]::new)), t);
     }
 
     private static <T, R> R reduceRight(List<T> list, BiFunction<T, R, R> op, R accum) {
@@ -522,18 +504,12 @@ public class LamaNodeFactory {
         return accum;
     }
 
-    ScopedExprGen createList(ScopedValsGen vals, Token t) {
-        return genValue(
-                GenInterface.map(vals, l -> GenInterface.map(
-                        GenInterfaces.sequence(l),
-                        n -> reduceRight(
-                                n,
-                                (lhs, rhs) -> ConsNodeFactory.create(new LamaNode[]{lhs, rhs}),
-                                (LamaNode) IntLiteralNodeFactory.create(0)
-                        )
-                )),
-                t
-        )::generate;
+    ScopedExprGen createList(List<ScopedValGen> vals, Token t) {
+        return mapValList(vals, n -> reduceRight(
+                n,
+                (lhs, rhs) -> ConsNodeFactory.create(new LamaNode[]{lhs, rhs}),
+                (LamaNode) IntLiteralNodeFactory.create(0)
+        ), t);
     }
 
     ScopedExprGen createPatternMatch(ScopedExprGen what, List<Pair<PatGen, ScopedExprGen>> matches) {
@@ -544,7 +520,7 @@ public class LamaNodeFactory {
                 )).toList()
         ), GenInterfaces::sequence);
         return GenInterface.lift2(
-                GenInterface.forget(GenInterface.konst(what, ValueCategory.Val)),
+                ExprGen.overrideVal(what),
                 matchesGen,
                 (wn, mn) ->
                         GenInterface.lift2(wn, mn, (whatNode, matchesNodes) -> {

@@ -9,9 +9,7 @@ import com.oracle.truffle.lama.runtime.LamaRef;
 import org.graalvm.collections.Pair;
 import org.graalvm.polyglot.Value;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -24,7 +22,7 @@ class LexicalScope {
     protected final Map<String, Integer> locals = new HashMap<>();
     protected final Map<String, Pair<Closure, Integer>> funs = new HashMap<>();
     public final LamaOperators.OperatorInfo operatorInfo;
-    protected ScopedValsGen inits;
+    protected ScopedValsGen inits = ScopedsGen.of()::generate;
 
     protected LexicalFuncScope getFuncScope() {
         return outer.getFuncScope();
@@ -35,18 +33,13 @@ class LexicalScope {
     }
 
     LexicalScope(LexicalScope outer) {
-        this(outer, ScopedValsGen.of());
-    }
-
-    LexicalScope(LexicalScope outer, ScopedValsGen inits) {
         this.outer = outer;
         this.operatorInfo = getOperatorInfo(outer).clone();
-        this.inits = inits;
     }
 
     void pullLocalValues(LexicalScope from) {
         inits = from.inits;
-        from.inits = ScopedValsGen.of();
+        from.inits = ScopedsGen.of()::generate;
     }
 
     interface RefGen extends ExprGen {
@@ -161,13 +154,15 @@ class LexicalScope {
     }
 
     protected void assignLocalValue(int slot, ScopedValGen value) {
-        inits = GenInterfaces.add(inits, GenInterface.map(
+        inits = ScopedsGen.add(inits, GenInterface.map(
                 value,
-                v -> v == null
-                        ? null // propagate `skip`
-                        : GenInterface.map(v, vn -> AssignNodeFactory.create(
-                        new LamaNode[]{getLocal(slot).generate(ValueCategory.Ref), vn}
-                ))))::generate;
+                v -> GenInterface.map(v, vn -> vn == null
+                                ? null // propagate `skip`
+                                : (LamaNode) AssignNodeFactory.create(
+                                new LamaNode[]{getLocal(slot).generate(ValueCategory.Ref), vn}
+                        )
+                )
+        ))::generate;
     }
 
     boolean addLocalValue(String name, ScopedValGen value) {

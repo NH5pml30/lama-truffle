@@ -13,4 +13,11 @@ public abstract class WriteNode extends BuiltinNode {
         LamaContext.get(this).getOutput().println(value);
         return value;
     }
+
+    @TruffleBoundary
+    @Specialization
+    public char[] write(char[] value) {
+        LamaContext.get(this).getOutput().println(value);
+        return value;
+    }
 }

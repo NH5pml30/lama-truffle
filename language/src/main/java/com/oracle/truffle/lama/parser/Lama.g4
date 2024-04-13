@@ -136,7 +136,7 @@ scopeExpression returns [ScopedExprGen result] :
 scopeExpression0 returns [ScopedExprGen result] :
     { factory.startBlock(); }
     scopeDefinitions
-    { ScopedExprsGen gen = ScopedExprsGen.of(); }
+    { ScopedExprsGen gen = ScopedsGen.of()::generate; }
     (
         expression
         { gen = $expression.result; }
@@ -179,7 +179,7 @@ functionArgumentsAndBody [String name, Token t] returns [Fun result] :
         '(' functionArguments ')' { factory.startFunction($functionArguments.result, $name); }
         '{' functionBody '}'      { $result = factory.finishFunction($functionBody.result); }
     |
-        '(' functionPatArguments ')' { var c = factory.startFunctionPat($functionPatArguments.result, $name, $t); }
+        '(' patList ')' { var c = factory.startFunctionPat($patList.result, $name, $t); }
         '{' functionBody '}'         { $result = factory.finishFunction(c.generate($functionBody.result)); }
     )
 ;
@@ -194,19 +194,9 @@ functionArguments returns [List<String> result] :
     )?
 ;
 
-functionPatArguments returns [List<PatGen> result] :
-    { $result = new ArrayList<>(); }
-    (
-        pattern         { $result.add($pattern.result); }
-        (
-            ',' pattern { $result.add($pattern.result); }
-        )*
-    )?
-;
-
 functionBody returns [ScopedExprsGen result] :
     scopeDefinitions
-    { $result = ScopedExprsGen.of(); }
+    { $result = ScopedsGen.of()::generate; }
     (
         expression
         { $result = $expression.result; }
@@ -232,10 +222,11 @@ level returns [Token relOp, int rel] :
 ;
 
 expression returns [ScopedExprsGen result] :
-    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result)::generate; }
+    basicExpression[0] { $result = ScopedsGen.of($basicExpression.result)::generate; }
     |
-    basicExpression[0] { $result = GenInterfaces.of($basicExpression.result)::generate; }
-    ';' expression     { $result = GenInterfaces.concat(GenInterface.konst($result, ValueCategory.Val), $expression.result)::generate; }
+    first=expression ';'
+    basicExpression[0]
+    { $result = ScopedsGen.add(ExprGen.konstVal($first.result), $basicExpression.result)::generate; }
 ;
 
 basicExpression [int _p] returns [ScopedExprGen result, int _r] :
@@ -338,13 +329,13 @@ doWhileExpression returns [ScopedExprGen result] :
     t='do' { var scope = factory.startBlock(); }
     defs=scopeDefinitions
     { factory.startBlock(); factory.pullLocalValues(scope); }
-    { ScopedExprsGen body = ScopedExprsGen.of(); }
+    { ScopedExprsGen body = ScopedsGen.of()::generate; }
     (
         expression { body = $expression.result; }
     )?
     { ScopedExprGen bodyNode = factory.finishBlock(body); }
     'while' cond=expression
-    { $result = factory.finishBlock(GenInterfaces.of(
+    { $result = factory.finishBlock(ScopedsGen.of(
               factory.createDoWhile(bodyNode, factory.finishSeq($cond.result), $t)
       )::generate); }
     'od'
@@ -353,7 +344,7 @@ doWhileExpression returns [ScopedExprGen result] :
 forExpression returns [ScopedExprGen result] :
     t='for' { factory.startBlock(); }
     defs=scopeDefinitions
-    { ScopedExprsGen init = ScopedExprsGen.of(); }
+    { ScopedExprsGen init = ScopedsGen.of()::generate; }
     (
         expression { init = $expression.result; }
     )?
@@ -361,46 +352,38 @@ forExpression returns [ScopedExprGen result] :
     ',' cond=expression
     ',' step=expression
     'do' scopeExpression0
-    { $result = factory.finishBlock(GenInterfaces.of(
+    { $result = factory.finishBlock(ScopedsGen.of(
               factory.createForLoop(initNode, factory.finishSeq($cond.result), factory.finishSeq($step.result), $scopeExpression0.result, $t)
       )::generate); }
     'od'
 ;
 
-arrayExpression returns [ScopedExprGen result] :
-    t='[' { ScopedValsGen vals = ScopedValsGen.of(); }
+valList returns [List<ScopedValGen> result] :
+    { $result = new ArrayList<>(); }
     (
-        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
+        expression { $result.add(ExprGen.konstVal(factory.finishSeq($expression.result))::generate); }
         (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
+            ',' expression { $result.add(ExprGen.konstVal(factory.finishSeq($expression.result))::generate); }
         )*
     )?
-    ']' { $result = factory.createArray(vals, $t); }
+;
+
+arrayExpression returns [ScopedExprGen result] :
+    t='[' valList ']'
+    { $result = factory.createArray($valList.result, $t); }
 ;
 
 sExpression returns [ScopedExprGen result] :
-    t=UIDENT
-    { ScopedValsGen vals = ScopedValsGen.of(); }
+    t=UIDENT { List<ScopedValGen> vals = List.of(); }
     (
-        '(' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
-        (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
-        )*
-        ')'
+      '(' valList ')' { vals = $valList.result; }
     )?
     { $result = factory.createSExp($t.getText(), vals, $t); }
 ;
 
 listExpression returns [ScopedExprGen result] :
-    t='{'
-    { ScopedValsGen vals = ScopedValsGen.of(); }
-    (
-        expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
-        (
-            ',' expression { vals = GenInterfaces.add(vals, GenInterface.konst(factory.finishSeq($expression.result), ValueCategory.Val))::generate; }
-        )*
-    )? '}'
-    { $result = factory.createList(vals, $t); }
+    t='{' valList '}'
+    { $result = factory.createList($valList.result, $t); }
 ;
 
 caseExpression returns [ScopedExprGen result] :
@@ -421,7 +404,7 @@ caseBranches returns [List<Pair<PatGen, ScopedExprGen>> result] :
 caseBranch returns [PatGen pat, ScopedExprGen returns] :
     { factory.startBlock(); }
     pattern { $pat = $pattern.result; } '->'
-    scopeExpression { $returns = factory.finishBlock(GenInterfaces.of($scopeExpression.result)::generate); }
+    scopeExpression { $returns = factory.finishBlock(ScopedsGen.of($scopeExpression.result)::generate); }
 ;
 
 pattern returns [PatGen result] :
@@ -455,16 +438,19 @@ consPattern returns [PatGen result] :
     simplePattern OP {$OP.getText().equals(":")}? pattern { $result = factory.createConsPattern($simplePattern.result, $pattern.result); }
 ;
 
-listPattern returns [PatGen result] :
-    '{'
-    { List<PatGen> pats = new ArrayList<>(); }
+patList returns [List<PatGen> result] :
+    { $result = new ArrayList<>(); }
     (
-        pattern { pats.add($pattern.result); }
+        pattern { $result.add($pattern.result); }
         (
-            ',' pattern { pats.add($pattern.result); }
+            ',' pattern { $result.add($pattern.result); }
         )*
-    )? '}'
-    { $result = factory.createListPattern(pats); }
+    )?
+;
+
+listPattern returns [PatGen result] :
+    '{' patList '}'
+    { $result = factory.createListPattern($patList.result); }
 ;
 
 wildcardPattern returns [PatGen result] :
@@ -472,27 +458,16 @@ wildcardPattern returns [PatGen result] :
 ;
 
 sExpPattern returns [PatGen result] :
-    t=UIDENT
-    { List<PatGen> pats = new ArrayList<>(); }
+    t=UIDENT { List<PatGen> pats = List.of(); }
     (
-        '(' pattern { pats.add($pattern.result); }
-        (
-            ',' pattern { pats.add($pattern.result); }
-        )*
-        ')'
+        '(' patList ')' { pats = $patList.result; }
     )?
     { $result = factory.createSExpPattern($t.getText(), pats); }
 ;
 
 arrayPattern returns [PatGen result] :
-    '[' { List<PatGen> pats = new ArrayList<>(); }
-    (
-        pattern { pats.add($pattern.result); }
-        (
-            ',' pattern { pats.add($pattern.result); }
-        )*
-    )? ']'
-    { $result = factory.createArrayPattern(pats); }
+    '[' patList ']'
+    { $result = factory.createArrayPattern($patList.result); }
 ;
 
 etaExpression returns [ScopedExprGen result] :
@@ -501,7 +476,7 @@ etaExpression returns [ScopedExprGen result] :
     {
       var params = List.of(factory.createSymbol(synthName, $t));
       var func = $basicExpression.result;
-      var fun = factory.finishFunction(GenInterfaces.of(factory.createCall(func, params, $t))::generate).instantiate();
+      var fun = factory.finishFunction(ScopedsGen.of(factory.createCall(func, params, $t))::generate).instantiate();
       $result = factory.genValue(fun, $t)::generate;
     }
 ;

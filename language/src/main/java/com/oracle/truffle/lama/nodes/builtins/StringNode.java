@@ -47,17 +47,28 @@ public abstract class StringNode extends BuiltinNode {
     @TruffleBoundary
     char[] toString(LamaSExp x) {
         var builder = new StringBuilder();
-        builder.append(SExpNode.fromHashCode(x.hash()));
+        var tag = new String(SExpNode.fromHashCode(x.hash()));
         var children = x.children();
-        if (children.length > 0) {
-            builder.append(" (");
-            for (int i = 0; i < children.length; i++) {
-                builder.append(executeWith(children[i]));
-                if (i + 1 != children.length) {
-                    builder.append(", ");
-                }
+        if (tag.equals(ConsNode.NAME) && children.length == 2) {
+            builder.append(executeWith(children[0]));
+            builder.append(" : ");
+            if (children[1] instanceof Integer y && y == 0) {
+                builder.append("{}");
+            } else {
+                builder.append(executeWith(children[1]));
             }
-            builder.append(')');
+        } else {
+            builder.append(tag);
+            if (children.length > 0) {
+                builder.append(" (");
+                for (int i = 0; i < children.length; i++) {
+                    builder.append(executeWith(children[i]));
+                    if (i + 1 != children.length) {
+                        builder.append(", ");
+                    }
+                }
+                builder.append(')');
+            }
         }
         return builder.toString().toCharArray();
     }

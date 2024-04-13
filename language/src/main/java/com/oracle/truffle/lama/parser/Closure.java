@@ -17,7 +17,8 @@ import static com.oracle.truffle.lama.parser.LexicalScope.refGen;
 // Class to store function closure (captured variables).
 // Each function captures variables by value, and the copy is created at the moment of referencing the function.
 // Global variables (and functions) are not captured and referenced as global variables everywhere. Currently, each local
-// function creates a local variable that stores a `LambdaNode` with its call target.
+// function creates a local variable that stores a `LambdaNode` with its call target (this could instead be done by
+// statically assigning `RootCallTarget`s where necessary after parsing).
 // If function `f` explicitly calls or references function `g`, then `f`'s closure must be enough to build `g`'s closure.
 // Function `f` can explicitly call function `g`, and `g` can explicitly call function `f`, if they are in the same block.
 // To support this, each closure has "`Instantiation`s" at each point of explicit mention of the function, and building up
